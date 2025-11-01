@@ -132,6 +132,5 @@ def process_one(path_in: str, node_col: str, street_col: str, path_out: str):
     con.close()
 
 
-
 if __name__ == '__main__':
-    process_one('data/Street_Closures_due_to_construction_activities_by_Intersection.csv', 'NODEID', 'ONSTREETNAME', 'data/Street_Closures_with_Segment_IDs.csv')
+    process_one('data/Street_Closures_due_to_construction_activities_by_Intersection.csv', 'NODEID', 'ONSTREETNAME', 'data/Street_Closures_due_to_construction_activities_by_Intersection_Segment_ids.csv')
