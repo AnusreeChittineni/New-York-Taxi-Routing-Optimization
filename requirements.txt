@@ -1,0 +1,7 @@
+duckdb>=1.2.12
+pandas>=2.1.0
+requests>=2.31.0
+sodapy>=2.0.0
+
+
+
