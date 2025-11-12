@@ -1,59 +1,116 @@
 import duckdb
 import pandas as pd
 from sodapy import Socrata
+import requests
+import time
+from io import StringIO
 
-
-# Connect to DuckDB (persistent database file)
+# Database setup
 DB_PATH = "nyc_traffic_2016.duckdb"
 conn = duckdb.connect(DB_PATH)
 print(f"Connected to {DB_PATH}")
 
-
 client = Socrata("data.cityofnewyork.us", app_token="FvrjNyrm0p2bfhsooy9kNZ7ib", timeout=60)
 
+# File paths (local)
+traffic_csv = "data/Automated_Traffic_Volume_Counts_20251102.csv"
+collisions_csv = "data/Motor_Vehicle_Collisions_-_Crashes_20251102.csv"
 
-# file paths
-# taxi_excel = "data\Yellow_Taxi_Trip_Data_Data_Dictionary.xlsx"          # already 2016 only
-traffic_csv = "data\Automated_Traffic_Volume_Counts_20251102.csv"   # contains multiple years
-collisions_csv = "data\Motor_Vehicle_Collisions_-_Crashes_20251102.csv"    # contains multiple years
+# ================================================================
+# Load taxi data (2016 only) — streamed directly from NYC Open Data
+# ================================================================
 
-# --------------------------
-# Load taxi data (already 2016)
-# --------------------------
+API_URL = "https://data.cityofnewyork.us/api/views/uacg-pexx/rows.csv?accessType=DOWNLOAD"
+APP_TOKEN = "FvrjNyrm0p2bfhsooy9kNZ7ib"
 
-print("\n Loading 2016 Yellow Taxi data from TLC Parquet files...")
+CHUNK_SIZE = 50_000  # rows per insert
+MAX_RETRIES = 5
 
-# Drop existing table if re-running
-conn.execute("DROP TABLE IF EXISTS taxi_data;")
+headers = {"X-App-Token": APP_TOKEN}
+row_buffer = []
+rows_inserted = 0
+first_chunk = True
+retries = 0
 
-conn.execute("""
-CREATE TABLE IF NOT EXISTS taxi_data AS 
-SELECT * FROM read_parquet('https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2016-01.parquet')
-LIMIT 0;
-""")
+print("\nLoading 2016 Yellow Taxi Trip Data directly from NYC Open Data...")
 
-# 2. Append each month
-parquet_urls = [
-    f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2016-{m:02}.parquet"
-    for m in range(1, 13)
-]
+def flush_buffer(buf, header_line, first_chunk):
+    """Append buffered CSV rows to DuckDB."""
+    global rows_inserted
+    if not buf:
+        return first_chunk
 
-for url in parquet_urls:
-    print(f"Inserting {url}...", flush=True)
-    conn.execute(f"""
-        INSERT INTO taxi_data
-        SELECT * FROM read_parquet('{url}');
-    """)
+    # Combine header + buffered data into a temporary CSV
+    csv_data = header_line + "\n" + "\n".join(buf)
+    df_chunk = pd.read_csv(StringIO(csv_data))
 
-print("taxi_data table created successfully.")
-print(conn.execute("SELECT COUNT(*) FROM taxi_data;").fetchone(), "rows loaded.\n")
+    if df_chunk.empty:
+        print("Empty chunk skipped.")
+        buf.clear()
+        return first_chunk
 
-# --------------------------
-# Load traffic CSV (filter only 2016)
-# --------------------------
+    if first_chunk:
+        conn.execute("DROP TABLE IF EXISTS taxi_data;")
+        conn.register("df_chunk", df_chunk)
+        conn.execute("CREATE TABLE taxi_data AS SELECT * FROM df_chunk;")
+        conn.unregister("df_chunk")
+        print(f"Created taxi_data table with {len(df_chunk.columns)} columns.")
+        first_chunk = False
+    else:
+        conn.register("df_chunk", df_chunk)
+        conn.execute("INSERT INTO taxi_data SELECT * FROM df_chunk;")
+        conn.unregister("df_chunk")
+
+    rows_inserted += len(df_chunk)
+    print(f"Inserted total {rows_inserted:,} rows so far.")
+    buf.clear()
+    return first_chunk
+
+
+while True:
+    try:
+        with requests.get(API_URL, headers=headers, stream=True, timeout=180) as r:
+            r.raise_for_status()
+            lines = r.iter_lines(decode_unicode=True)
+
+            # Extract header once
+            header_line = next(lines)
+            print("Header:", header_line[:100], "...")
+
+            for line in lines:
+                if not line:
+                    continue
+                row_buffer.append(line)
+                if len(row_buffer) >= CHUNK_SIZE:
+                    first_chunk = flush_buffer(row_buffer, header_line, first_chunk)
+                    row_buffer = []
+
+            # Flush final partial chunk
+            if row_buffer:
+                first_chunk = flush_buffer(row_buffer, header_line, first_chunk)
+
+        print("Completed full taxi data stream.")
+        break
+
+    except requests.exceptions.ChunkedEncodingError:
+        retries += 1
+        print(f"\nConnection dropped — retry {retries}/{MAX_RETRIES}")
+        if retries >= MAX_RETRIES:
+            print("Too many dropouts, aborting stream.")
+            break
+        print("Sleeping 10 seconds, then resuming...")
+        time.sleep(10)
+        continue
+
+print(f"\nFinal count: {rows_inserted:,} rows inserted into taxi_data.\n")
+
+# ================================================================
+# Load Traffic Volume Counts (filter only 2016)
+# ================================================================
+print("Loading 2016 Traffic Volume Counts...")
 
 df_sample = pd.read_csv(traffic_csv, nrows=5)
-print(df_sample.columns)
+print("Traffic columns:", list(df_sample.columns))
 
 conn.execute(f"""
 CREATE TABLE IF NOT EXISTS traffic_2016 AS
@@ -65,21 +122,23 @@ WHERE "Yr" = 2016;
 print("traffic_2016 table created successfully.")
 print(conn.execute("SELECT COUNT(*) FROM traffic_2016;").fetchone(), "rows loaded.\n")
 
-# --------------------------
-# Load collisions CSV (filter only 2016)
-# --------------------------
+# ================================================================
+# Load Motor Vehicle Collisions (filter only 2016)
+# ================================================================
+print("Loading 2016 Motor Vehicle Collisions data...")
 
 df_sample = pd.read_csv(collisions_csv, nrows=5)
-print(df_sample)
+print("Collision columns:", list(df_sample.columns))
 
 conn.execute(f"""
 CREATE TABLE IF NOT EXISTS collisions_2016 AS
 SELECT *,
-       STRPTIME(CAST("CRASH DATE" AS VARCHAR) || ' ' || CAST("CRASH TIME" AS VARCHAR), '%Y-%m-%d %H:%M:%S') AS crash_datetime
+       STRPTIME(CAST("CRASH DATE" AS VARCHAR) || ' ' || CAST("CRASH TIME" AS VARCHAR),
+                '%Y-%m-%d %H:%M:%S') AS crash_datetime
 FROM read_csv_auto(
     '{collisions_csv}',
-    types={{'ZIP CODE': 'VARCHAR'}},   -- force ZIP CODE to string
-    nullstr=''                         -- treat empty strings as NULL
+    types={{'ZIP CODE': 'VARCHAR'}},
+    nullstr=''
 )
 WHERE EXTRACT(year FROM STRPTIME(CAST("CRASH DATE" AS VARCHAR), '%Y-%m-%d')) = 2016;
 """)
@@ -87,13 +146,17 @@ WHERE EXTRACT(year FROM STRPTIME(CAST("CRASH DATE" AS VARCHAR), '%Y-%m-%d')) = 2
 print("collisions_2016 table created successfully.")
 print(conn.execute("SELECT COUNT(*) FROM collisions_2016;").fetchone(), "rows loaded.\n")
 
-
-print("\n Tables in database:")
+# ================================================================
+# Show summary + preview
+# ================================================================
+print("\nTables in database:")
 print(conn.execute("SHOW TABLES;").fetchdf())
 
-print("\n Sample from taxi_data:")
-print(conn.execute("SELECT * FROM taxi_data LIMIT 5;").fetchdf())
+print("\nSample from taxi_data:")
+try:
+    print(conn.execute("SELECT * FROM taxi_data LIMIT 5;").fetchdf())
+except Exception as e:
+    print("Could not sample taxi_data yet:", e)
 
 conn.close()
-print("\n Database build complete — saved as", DB_PATH)
-
+print(f"\nDatabase build complete — saved as {DB_PATH}")
