@@ -1,0 +1,5 @@
+*.duckdb
+*.png
+# parquet files storing edge features for gnn model
+features/nyc_gnn_data/
+features/cache/
