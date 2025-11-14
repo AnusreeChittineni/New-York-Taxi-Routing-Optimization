@@ -10,31 +10,6 @@ This project builds an intelligent **traffic simulation and optimization framewo
 The system learns to **predict edge-level travel times** and **infer plausible routes** without ground-truth path labels.  
 It also allows **testing of road closures** through beam search and computing travel-time metrics.
 
----
-
-## 🧩 Repository Structure
-
-.
-├── data/
-│ ├── manhattan_graph.pt # PyTorch Geometric graph of Manhattan
-│ ├── manhattan_baseline.parquet # Baseline travel times from AequilibraE
-│ └── ...
-├── models/
-│ └── gnn_trained.pth # Trained model weights
-├── results/
-│ ├── beam_search_summary.csv
-│ └── plots/
-├── duckdb_connector.py # Abstraction layer for DuckDB taxi data
-├── gnn_model.py # GNN definition & save/load helpers
-├── routing.py # Candidate route generation (K-shortest paths)
-├── exploration_policy.py # Exploration policies (ε-greedy, softmax, gumbel)
-├── train_gnn.py # GNN training with stochastic candidate routing
-├── test_gnn_beam.py # Beam search evaluation and travel-time metrics
-└── README.md
-
-
----
-
 ## 🚀 End-to-End Workflow
 
 ### 1️⃣ Data and Graph Creation
