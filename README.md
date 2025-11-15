@@ -26,17 +26,17 @@ Real trip data comes from **DuckDB** tables (NYC TLC Yellow Taxi data):
 
 ### 3️⃣ GNN Model
 - Input: Node and edge features.  
-- Output: Predicted **edge-level travel times** \\( \hat{t}(e) \\).  
+- Output: Predicted **edge-level travel times** $ \hat{t}(e) $.  
 - Architecture: GraphSAGE / GAT layers, ReLU activations.
 
 ### 4️⃣ Candidate Route Generation
 - For each OD pair, generate **K candidate paths** using **Yen’s K-shortest paths** algorithm.
 - Edge weights come from current model predictions.
 - Encourage diversity via overlap penalty:
-  \\[
+  $$
   w^{(\text{div})}_e = \hat{t}(e) + \lambda \cdot \phi_e,
-  \\]
-  where \\( \phi_e \\) counts how many prior candidates included edge \\(e\\).
+  $$
+  where $ \phi_e $ counts how many prior candidates included edge $e$.
 
 ### 5️⃣ Exploration-based Path Selection
 Since true routes are unknown, the model maintains a **policy** over candidate paths.
@@ -48,99 +48,99 @@ We want the model to **explore early** (many routes) and **exploit later** (best
 ## 🧠 Policy Space and Training Math
 
 Let:
-- \\( \hat{t}(e) \\) — predicted edge travel time.  
-- \\( s_{ij} = \sum_{e \in p_{ij}} \hat{t}(e) \\) — predicted time for path \\(p_{ij}\\).  
-- \\( T_i^{\text{obs}} = t_{\text{dropoff}} - t_{\text{pickup}} \\) — observed trip duration.
+- $ \hat{t}(e) $ — predicted edge travel time.  
+- $ s_{ij} = \sum_{e \in p_{ij}} \hat{t}(e) $ — predicted time for path $p_{ij}$.  
+- $ T_i^{\text{obs}} = t_{\text{dropoff}} - t_{\text{pickup}} $ — observed trip duration.
 
-We define a **policy** \\( \pi_\theta(j | \mathcal{P}_i) \\) over the candidate routes \\( \mathcal{P}_i = \{p_{i1}, \dots, p_{iK}\} \\).
+We define a **policy** $ \pi_\theta(j | \mathcal{P}_i) $ over the candidate routes $ \mathcal{P}_i = \{p_{i1}, \dots, p_{iK}\} $.
 
 ---
 
 ### 1. Candidate Path Generation
-Using current edge costs, produce \\(K\\) paths per OD pair:
-\\[
+Using current edge costs, produce $K$ paths per OD pair:
+$$
 \mathcal{P}_i = \{p_{i1}, p_{i2}, \ldots, p_{iK}\}.
-\\]
-Each has a predicted cost \\( s_{ij} \\).
+$$
+Each has a predicted cost $ s_{ij} $.
 
 ---
 
 ### 2. Policy Definitions
 
 #### (a) **ε-Greedy (Exploration–Exploitation Tradeoff)**
-\\[
+$$
 j \sim
 \begin{cases}
 \arg\min_j s_{ij}, & \text{with probability } 1-\varepsilon,\\\\
 \text{Uniform}(1..K), & \text{with probability } \varepsilon.
 \end{cases}
-\\]
-- Anneal \\( \varepsilon_t \\) from 0.3 → 0.02 across training.  
+$$
+- Anneal $ \varepsilon_t $ from 0.3 → 0.02 across training.  
 - Ensures exploration early, exploitation later.
 
 #### (b) **Softmax (Boltzmann Policy)**
-\\[
+$$
 \pi_\tau(j) = \frac{\exp(-s_{ij}/\tau)}{\sum_k \exp(-s_{ik}/\tau)}.
-\\]
-- Temperature \\( \tau \\) controls randomness.  
-  - High \\( \tau \\): almost uniform (explore).  
-  - Low \\( \tau \\): near-greedy (exploit).
+$$
+- Temperature $ \tau $ controls randomness.  
+  - High $ \tau $: almost uniform (explore).  
+  - Low $ \tau $: near-greedy (exploit).
 
 Expected path time:
-\\[
+$$
 \tilde{T}_i = \sum_j \pi_\tau(j)\, s_{ij}.
-\\]
+$$
 
 #### (c) **Gumbel–Softmax (Differentiable Approximation)**
-Adds Gumbel noise \\( g_j \sim \text{Gumbel}(0,1) \\):
-\\[
+Adds Gumbel noise $ g_j \sim \text{Gumbel}(0,1) $:
+$$
 \alpha_j = \frac{\exp\left( (-s_{ij} + g_j)/\tau \right)}{\sum_k \exp\left( (-s_{ik} + g_k)/\tau \right)}.
-\\]
+$$
 Soft mask over edges:
-\\[
+$$
 m^{(\text{soft})}(e) = \sum_j \alpha_j \cdot \mathbf{1}\{e \in p_{ij}\}.
-\\]
+$$
 Soft path time:
-\\[
+$$
 \tilde{T}_i = \sum_{e} m^{(\text{soft})}(e) \hat{t}(e)
              = \sum_j \alpha_j s_{ij}.
-\\]
+$$
 Differentiable and trainable end-to-end.
 
 ---
 
 ### 3. Loss Function
 
-For trip \\(i\\):
+For trip $i$:
 - Hard selection:
-  \\[
+  $$
   \mathcal{L}_i = (s_{ij} - T_i^{\text{obs}})^2.
-  \\]
+  $$
 - Soft mixture:
-  \\[
+  $$
   \mathcal{L}_i = (\tilde{T}_i - T_i^{\text{obs}})^2.
-  \\]
+  $$
 
 Optionally use **Huber loss** for robustness:
-\\[
+$$
 \ell_\delta(a,b) =
 \begin{cases}
 \frac{1}{2}(a-b)^2, & |a-b| \le \delta,\\\\
 \delta(|a-b| - \tfrac{1}{2}\delta), & \text{otherwise.}
 \end{cases}
-\\]
+$$
 
 #### + Entropy Bonus
 Keeps exploration active:
-\\[
+$$
 \mathcal{L}_\text{entropy} = -\beta H(\pi), \quad
 H(\pi) = -\sum_j \pi(j)\log\pi(j).
-\\]
+$$
 
 Final loss:
-\\[
+$$
 \mathcal{L} = \frac{1}{N}\sum_i [\mathcal{L}_i + \mathcal{L}_\text{entropy}].
-\\]
+$$
 
 ---
 
@@ -161,12 +161,12 @@ Gumbel–Softmax allows near-REINFORCE exploration without high variance.
 | β (entropy) | Weight for entropy bonus | 0.001–0.01 |
 
 Schedules:
-\\[
+$$
 \varepsilon_t = \varepsilon_\text{end} + (\varepsilon_\text{start}-\varepsilon_\text{end})\left(1 - \frac{t}{T}\right),
-\\]
-\\[
+$$
+$$
 \tau_t = \tau_\text{end} + (\tau_\text{start}-\tau_\text{end})\left(1 - \frac{t}{T}\right).
-\\]
+$$
 
 ---
 
@@ -184,14 +184,14 @@ At test time, the system simulates **road closures**.
 
 **Metrics:**
 1. **Average Travel Time (AvgTT):**
-   \\[
+   $$
    \text{AvgTT} = \frac{1}{N}\sum_i \min_j \sum_{e\in p_{ij}} \hat{t}(e)
-   \\]
+   $$
 2. **Weighted Average Travel Time (WAvgTT):**
-   \\[
+   $$
    \text{WAvgTT} = \mathbb{E}_{(o,d)\sim q_\text{hotspot}}\big[\min_j \sum_{e\in p_{ij}}\hat{t}(e)\big],
-   \\]
-   where \\( q_\text{hotspot} \\) is built from pickup/dropoff frequencies in DuckDB.
+   $$
+   where $ q_\text{hotspot} $ is built from pickup/dropoff frequencies in DuckDB.
 
 ---
 
@@ -200,9 +200,9 @@ At test time, the system simulates **road closures**.
 1. Load OD pairs & observed trip durations from DuckDB.  
 2. For each mini-batch:
    - Generate K candidate paths per OD.  
-   - Compute predicted times \\( s_{ij} \\).  
-   - Sample route \\( j \\) from the exploration policy.  
-   - Compute loss \\( (\hat{T} - T^{\text{obs}})^2 \\).  
+   - Compute predicted times $ s_{ij} $.  
+   - Sample route $ j $ from the exploration policy.  
+   - Compute loss $ (\hat{T} - T^{\text{obs}})^2 $.  
    - Backpropagate into GNN edge-time predictions.
 3. Gradually reduce exploration (ε or τ).
 4. Save model weights.
@@ -213,15 +213,15 @@ At test time, the system simulates **road closures**.
 
 | Symbol | Meaning |
 |---------|----------|
-| \\( \hat{t}(e) \\) | Predicted edge travel time |
-| \\( s_{ij} = \sum_{e\in p_{ij}} \hat{t}(e) \\) | Predicted path travel time |
-| \\( T_i^{\text{obs}} \\) | Observed travel time (dropoff–pickup) |
-| \\( \pi(j) \\) | Policy probability of choosing path j |
-| \\( \alpha_j \\) | Gumbel-Softmax mixture coefficient |
-| \\( m(e) \\) | Path mask (1 if edge e on path) |
-| \\( \tilde{T}_i \\) | Expected path time |
-| \\( \mathcal{L}_i \\) | Trip-level loss |
-| \\( \varepsilon, \tau, \beta \\) | Exploration parameters |
+| $ \hat{t}(e) $ | Predicted edge travel time |
+| $ s_{ij} = \sum_{e\in p_{ij}} \hat{t}(e) $ | Predicted path travel time |
+| $ T_i^{\text{obs}} $ | Observed travel time (dropoff–pickup) |
+| $ \pi(j) $ | Policy probability of choosing path j |
+| $ \alpha_j $ | Gumbel-Softmax mixture coefficient |
+| $ m(e) $ | Path mask (1 if edge e on path) |
+| $ \tilde{T}_i $ | Expected path time |
+| $ \mathcal{L}_i $ | Trip-level loss |
+| $ \varepsilon, \tau, \beta $ | Exploration parameters |
 
 ---
 
