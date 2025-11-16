@@ -1,0 +1,44 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python packaging / build artifacts
+build/
+dist/
+*.egg-info/
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# IDE settings
+.idea/
+.vscode/
+.spyproject/
+
+# Cached data & legacy assets
+cache/
+lion/
+dataconnection/legacy/lion/
+# Parquet exports
+*.parquet
+
+# PyTorch / training artifacts
+models/*.pth
+results/*.csv
+
+# DuckDB temp files
+*.duckdb.wal
