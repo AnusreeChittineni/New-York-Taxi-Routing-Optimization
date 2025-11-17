@@ -1,8 +1,9 @@
-"""Training script for stochastic candidate-route GNN."""
+"""Training script for stochastic candidate-route GNN with RMSE reporting."""
 
 from __future__ import annotations
 
 import argparse
+import math
 import random
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
@@ -17,7 +18,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from dataconnection.duckdb_connector import connect_duckdb, load_trip_data
@@ -32,42 +32,37 @@ from gnn.gnn_model import build_model, detect_device, save_model
 from gnn.routing import build_nx_from_pyg, k_shortest_paths, path_edge_mask
 
 
-class TripDataset(Dataset):
-    """Simple dataset storing OD pairs and observed durations."""
-
-    def __init__(self, samples: Sequence[Tuple[int, int, float]]):
-        self.samples = list(samples)
-
-    def __len__(self) -> int:
-        return len(self.samples)
-
-    def __getitem__(self, idx: int) -> Tuple[int, int, float]:
-        return self.samples[idx]
+TripSample = Tuple[int, int, float]
 
 
-def build_trip_samples(
-    graph, num_nodes: int, limit: int = 5000, db_path: str | None = None
-) -> List[Tuple[int, int, float]]:
-    """Load trips from DuckDB; fallback to synthetic samples."""
+def batch_iter(dataset: Sequence[TripSample], batch_size: int) -> Sequence[Sequence[TripSample]]:
+    for i in range(0, len(dataset), batch_size):
+        yield dataset[i : i + batch_size]
 
-    samples: List[Tuple[int, int, float]] = []
-    if db_path:
-        try:
-            conn = connect_duckdb(db_path)
-            df = load_trip_data(conn, limit=limit)
-            if not df.empty:
-                trip_durations = (
-                    pd.to_datetime(df["tpep_dropoff_datetime"])
-                    - pd.to_datetime(df["tpep_pickup_datetime"])
-                ).dt.total_seconds() / 60.0
-                o_nodes = df["PULocationID"].astype(int) % num_nodes
-                d_nodes = df["DOLocationID"].astype(int) % num_nodes
-                for o, d, t in zip(o_nodes, d_nodes, trip_durations):
-                    if o == d or np.isnan(t):
-                        continue
-                    samples.append((int(o), int(d), float(max(t, 1.0))))
-        except Exception as exc:  # pragma: no cover - fallback
-            print(f"[WARN] DuckDB load failed: {exc}. Falling back to synthetic samples.")
+
+def load_samples_from_parquet(path: Path, num_nodes: int) -> List[TripSample]:
+    df = pd.read_parquet(path)
+    return [
+        (int(row.origin) % num_nodes, int(row.destination) % num_nodes, float(row.travel_min))
+        for row in df.itertuples(index=False)
+    ]
+
+
+def build_trip_samples(num_nodes: int, limit: int, db_path: str | None) -> List[TripSample]:
+    samples: List[TripSample] = []
+    try:
+        conn = connect_duckdb(db_path)
+        df = load_trip_data(conn, limit=limit)
+        if not df.empty:
+            pickups = pd.to_datetime(df["pickup_ts"])
+            dropoffs = pd.to_datetime(df["dropoff_ts"])
+            durations = (dropoffs - pickups).dt.total_seconds() / 60.0
+            for pu, do, dur in zip(df["PULocationID"], df["DOLocationID"], durations):
+                if pd.isna(pu) or pd.isna(do) or pd.isna(dur) or dur <= 0:
+                    continue
+                samples.append((int(pu) % num_nodes, int(do) % num_nodes, float(dur)))
+    except Exception as exc:  # pragma: no cover
+        print(f"[WARN] DuckDB load failed ({exc}); using synthetic fallback.")
 
     if not samples:
         rng = np.random.default_rng(42)
@@ -77,20 +72,24 @@ def build_trip_samples(
     return samples
 
 
-def batch_iter(dataset: Sequence, batch_size: int) -> Sequence[Sequence]:
-    """Yield mini-batches."""
-
-    for i in range(0, len(dataset), batch_size):
-        yield dataset[i : i + batch_size]
+def train_val_split(samples: List[TripSample], val_ratio: float, seed: int = 42) -> tuple[List[TripSample], List[TripSample]]:
+    rng = random.Random(seed)
+    shuffled = samples[:]
+    rng.shuffle(shuffled)
+    cutoff = int(len(shuffled) * (1 - val_ratio))
+    return shuffled[:cutoff], shuffled[cutoff:]
 
 
 def select_policy_weights(
     scores: List[float], policy: str, epsilon: float, temperature: float, device: torch.device
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
-    """Return path weights tensor and monitoring info."""
-
-    policy = policy.lower()
     info = {"policy": policy, "random_pick": 0.0}
+    policy = policy.lower()
+    if policy == "greedy":
+        idx = int(np.argmin(scores))
+        weights = torch.zeros(len(scores), device=device)
+        weights[idx] = 1.0
+        return weights, info
     if policy == "epsilon_greedy":
         idx = epsilon_greedy(scores, epsilon)
         weights = torch.zeros(len(scores), device=device)
@@ -101,24 +100,65 @@ def select_policy_weights(
         idx = softmax_sample(scores, temperature)
         weights = torch.zeros(len(scores), device=device)
         weights[idx] = 1.0
-        entropy = -float(np.log(len(scores)) if len(scores) > 1 else 0.0)
-        info["entropy"] = entropy
+        info["entropy"] = -float(np.log(len(scores)) if len(scores) > 1 else 0.0)
         return weights, info
     weights = gumbel_softmax_mixture(scores, temperature).to(device)
     return weights, info
 
 
+def update_graph_costs(G, edge_times: torch.Tensor) -> None:
+    cpu_vals = edge_times.detach().cpu().numpy()
+    for _, _, data in G.edges(data=True):
+        data["time"] = float(cpu_vals[data["edge_id"]])
+
+
+def evaluate_rmse(
+    model: torch.nn.Module,
+    data,
+    G,
+    samples: Sequence[TripSample],
+    num_edges: int,
+    device: torch.device,
+    max_eval: int = 500,
+    k_candidates: int = 3,
+) -> float:
+    model.eval()
+    with torch.no_grad():
+        edge_pred = model(data).detach()
+    update_graph_costs(G, edge_pred)
+
+    subset = samples if len(samples) <= max_eval else random.sample(samples, max_eval)
+    sq_errors = []
+    for origin, dest, obs in subset:
+        paths = k_shortest_paths(G, origin, dest, k=k_candidates, weight="time")
+        if not paths:
+            continue
+        times = []
+        for p in paths:
+            mask = path_edge_mask(p, num_edges).to(device).float()
+            times.append(float((mask * edge_pred).sum().item()))
+        pred_time = min(times)
+        sq_errors.append((pred_time - obs) ** 2)
+
+    return math.sqrt(float(np.mean(sq_errors))) if sq_errors else float("nan")
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train GNN with stochastic route sampling.")
+    parser = argparse.ArgumentParser(description="Train GNN with candidate-route sampling.")
     parser.add_argument("--graph-path", type=str, default="data/manhattan_graph.pt")
-    parser.add_argument("--db-path", type=str, default=None)
+    parser.add_argument("--db-path", type=str, default="data/nyc_traffic_2016.duckdb")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--hidden-channels", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--model-path", type=str, default="models/gnn_trained.pth")
+    parser.add_argument("--trip-limit", type=int, default=50_000)
+    parser.add_argument("--val-ratio", type=float, default=0.2)
+    parser.add_argument("--train-samples-path", type=str, default=None)
+    parser.add_argument("--val-samples-path", type=str, default=None)
     parser.add_argument("--K-CANDS", type=int, default=8)
     parser.add_argument("--POLICY", type=str, default="gumbel_softmax")
+    parser.add_argument("--policy-mode", type=str, choices=["easy", "complex"], default="complex")
     parser.add_argument("--EPS-START", type=float, default=0.30)
     parser.add_argument("--EPS-END", type=float, default=0.02)
     parser.add_argument("--EPS-STEPS", type=int, default=5000)
@@ -128,6 +168,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ENTROPY-BETA", type=float, default=0.001)
     parser.add_argument("--LOSS", type=str, default="huber", choices=["mse", "huber"])
     parser.add_argument("--anneal", type=str, default="linear", choices=["linear", "cosine"])
+    parser.add_argument("--rmse-eval-samples", type=int, default=500)
     return parser.parse_args()
 
 
@@ -137,7 +178,7 @@ def main() -> None:
     np.random.seed(42)
     torch.manual_seed(42)
 
-    data: torch.Tensor = torch.load(args.graph_path)
+    data = torch.load(args.graph_path)
     if not hasattr(data, "edge_index"):
         raise ValueError("Graph file must contain edge_index")
 
@@ -145,61 +186,63 @@ def main() -> None:
     num_edges = data.edge_index.size(1)
     device = detect_device()
 
-    samples = build_trip_samples(data, num_nodes, db_path=args.db_path)
-    dataset = TripDataset(samples)
+    if args.train_samples_path and args.val_samples_path:
+        train_samples = load_samples_from_parquet(Path(args.train_samples_path), num_nodes)
+        val_samples = load_samples_from_parquet(Path(args.val_samples_path), num_nodes)
+    else:
+        raw_samples = build_trip_samples(num_nodes, args.trip_limit, args.db_path)
+        train_samples, val_samples = train_val_split(raw_samples, args.val_ratio)
+
+    training_policy = args.POLICY if args.policy_mode == "complex" else "greedy"
+    k_candidates = args.K_CANDS if args.policy_mode == "complex" else min(3, args.K_CANDS)
+    diversity_penalty = 0.1 if args.policy_mode == "complex" else 0.0
 
     model = build_model(data.num_node_features, args.hidden_channels).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-
-    G = build_nx_from_pyg(data)
-
+    G = build_nx_from_pyg(data.cpu())
     schedule_fn = linear_anneal if args.anneal == "linear" else cosine_anneal
     global_step = 0
 
     data = data.to(device)
 
     for epoch in range(1, args.epochs + 1):
-        epoch_loss = 0.0
-        random.shuffle(dataset.samples)
-        progress = tqdm(
-            batch_iter(dataset.samples, args.batch_size),
-            total=max(1, len(dataset) // args.batch_size),
-            desc=f"Epoch {epoch}",
-        )
+        epoch_losses = []
+        random.shuffle(train_samples)
+        batches = list(batch_iter(train_samples, args.batch_size))
+        progress = tqdm(batches, desc=f"Epoch {epoch}")
+
         for batch in progress:
+            model.train()
             optimizer.zero_grad()
             edge_pred = model(data)
+            update_graph_costs(G, edge_pred)
             batch_losses = []
             entropy_bonus = 0.0
+
             for origin, dest, obs_time in batch:
                 epsilon = schedule_fn(global_step, args.EPS_START, args.EPS_END, args.EPS_STEPS)
                 tau = schedule_fn(global_step, args.TAU_START, args.TAU_END, args.TAU_STEPS)
-
                 paths = k_shortest_paths(
-                    G, origin, dest, k=args.K_CANDS, weight="time", diversity_penalty=0.1
+                    G, origin, dest, k=k_candidates, weight="time", diversity_penalty=diversity_penalty
                 )
                 if not paths:
                     continue
-                scores = [float(path_edge_mask(p, num_edges).float().to(device).mul(edge_pred).sum()) for p in paths]
-                weights, info = select_policy_weights(scores, args.POLICY, epsilon, tau, device)
 
                 path_masks = torch.stack([path_edge_mask(p, num_edges).to(device).float() for p in paths])
+                scores = [float((mask * edge_pred).sum().item()) for mask in path_masks]
+                weights, _ = select_policy_weights(scores, training_policy, epsilon, tau, device)
 
-                if args.POLICY == "gumbel_softmax":
+                if training_policy == "gumbel_softmax":
                     mixture_mask = torch.matmul(weights.unsqueeze(0), path_masks).squeeze(0)
                 else:
-                    idx = weights.argmax().item()
-                    mixture_mask = path_masks[idx]
-                pred_time = (mixture_mask * edge_pred).sum()
+                    mixture_mask = path_masks[weights.argmax().item()]
 
+                pred_time = (mixture_mask * edge_pred).sum()
                 obs = torch.tensor(obs_time, dtype=torch.float32, device=device)
-                if args.LOSS == "mse":
-                    loss_val = F.mse_loss(pred_time, obs)
-                else:
-                    loss_val = F.smooth_l1_loss(pred_time, obs)
-                if args.POLICY == "gumbel_softmax":
+                loss_val = F.mse_loss(pred_time, obs) if args.LOSS == "mse" else F.smooth_l1_loss(pred_time, obs)
+                if training_policy == "gumbel_softmax":
                     entropy = -torch.sum(weights * torch.log(weights + 1e-8))
-                    entropy_bonus += -args.ENTROPY_BETA * entropy
+                    entropy_bonus -= args.ENTROPY_BETA * entropy
                 batch_losses.append(loss_val)
                 global_step += 1
 
@@ -208,11 +251,20 @@ def main() -> None:
             loss = torch.stack(batch_losses).mean() + entropy_bonus
             loss.backward()
             optimizer.step()
-            epoch_loss += loss.item()
+            epoch_losses.append(loss.item())
             progress.set_postfix({"loss": loss.item()})
 
-        avg_loss = epoch_loss / max(1, len(dataset) / args.batch_size)
-        print(f"Epoch {epoch} avg loss: {avg_loss:.4f}")
+        avg_loss = float(np.mean(epoch_losses)) if epoch_losses else float("nan")
+        train_rmse = evaluate_rmse(
+            model, data, G, train_samples, num_edges, device, args.rmse_eval_samples, k_candidates
+        )
+        val_rmse = evaluate_rmse(
+            model, data, G, val_samples, num_edges, device, args.rmse_eval_samples, k_candidates
+        )
+        print(
+            f"Epoch {epoch}: avg loss={avg_loss:.4f} | train RMSE={train_rmse:.3f} min | "
+            f"val RMSE={val_rmse:.3f} min (policy_mode={args.policy_mode})"
+        )
 
     save_model(model.cpu(), args.model_path)
     print(f"Model saved to {args.model_path}")

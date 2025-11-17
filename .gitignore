@@ -42,3 +42,4 @@ results/*.csv
 
 # DuckDB temp files
 *.duckdb.wal
+*.duckdb

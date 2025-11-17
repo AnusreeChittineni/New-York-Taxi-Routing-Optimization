@@ -22,6 +22,14 @@ def train_gnn_default() -> None:
     run_command(["python", "gnn/train_gnn.py"], "Train GNN (default SCRT config)")
 
 
+def test_gnn_rmse() -> None:
+    run_command(["python", "gnn/test_gnn_rmse.py"], "Evaluate GNN RMSE on validation set")
+
+
+def split_trip_data() -> None:
+    run_command(["python", "data/split_trips.py"], "Build train/validation trip samples from DuckDB")
+
+
 def beam_search_eval() -> None:
     run_command(["python", "gnn/test_gnn_beam.py"], "Beam-search evaluation")
 
@@ -34,7 +42,9 @@ def wardrop_summary() -> None:
 if __name__ == "__main__":
     # Uncomment the routines you want to run:
     # run_baseline_sim()
+    # split_trip_data()
     # train_gnn_default()
+    # test_gnn_rmse()
     # beam_search_eval()
     # wardrop_summary()
     pass

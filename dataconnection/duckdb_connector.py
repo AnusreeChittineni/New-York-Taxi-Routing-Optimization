@@ -8,28 +8,29 @@ from typing import Optional
 import duckdb
 import pandas as pd
 
-DEFAULT_DB_PATH = "nyc_taxi.duckdb"
-PARQUET_GLOB = "yellow_tripdata_2024-*.parquet"
+DEFAULT_DB_CANDIDATES = [
+    Path("data/nyc_traffic_2016.duckdb"),
+    Path("nyc_traffic_2016.duckdb"),
+]
 
 
-def connect_duckdb(db_path: str | Path = DEFAULT_DB_PATH) -> duckdb.DuckDBPyConnection:
+def _resolve_db_path(db_path: str | Path | None = None) -> Path:
+    if db_path:
+        return Path(db_path)
+    for candidate in DEFAULT_DB_CANDIDATES:
+        if candidate.exists():
+            return candidate
+    # fall back to first path even if missing (duckdb will create)
+    return DEFAULT_DB_CANDIDATES[0]
+
+
+def connect_duckdb(db_path: str | Path | None = None) -> duckdb.DuckDBPyConnection:
     """Create or connect to a DuckDB file."""
 
-    path = Path(db_path)
+    path = _resolve_db_path(db_path)
     conn = duckdb.connect(str(path))
     conn.execute("PRAGMA threads=4;")
     return conn
-
-
-def _base_query(limit_clause: Optional[int] = None) -> str:
-    sql = (
-        "SELECT PULocationID, DOLocationID, trip_distance, total_amount, "
-        "tpep_pickup_datetime, tpep_dropoff_datetime "
-        f"FROM '{PARQUET_GLOB}'"
-    )
-    if limit_clause:
-        sql += f" LIMIT {limit_clause}"
-    return sql
 
 
 def load_trip_data(
@@ -40,14 +41,28 @@ def load_trip_data(
 ) -> pd.DataFrame:
     """Load trip slices with optional date filtering."""
 
-    sql = _base_query(limit)
-    conditions = []
+    conditions = ["pickup_ts IS NOT NULL", "dropoff_ts IS NOT NULL"]
     if start_date:
-        conditions.append(f"tpep_pickup_datetime >= '{start_date}'")
+        conditions.append(f"pickup_ts >= TIMESTAMP '{start_date}'")
     if end_date:
-        conditions.append(f"tpep_dropoff_datetime <= '{end_date}'")
-    if conditions:
-        sql += f" WHERE {' AND '.join(conditions)}"
+        conditions.append(f"dropoff_ts <= TIMESTAMP '{end_date}'")
+    where_clause = " AND ".join(conditions)
+    limit_clause = f" LIMIT {limit}" if limit else ""
+    sql = f"""
+        WITH trips AS (
+            SELECT
+                PULocationID,
+                DOLocationID,
+                trip_distance,
+                total_amount,
+                TRY_STRPTIME(tpep_pickup_datetime, '%m/%d/%Y %I:%M:%S %p') AS pickup_ts,
+                TRY_STRPTIME(tpep_dropoff_datetime, '%m/%d/%Y %I:%M:%S %p') AS dropoff_ts
+            FROM taxi_data
+        )
+        SELECT * FROM trips
+        WHERE {where_clause}
+        {limit_clause}
+    """
     return conn.execute(sql).df()
 
 
@@ -59,7 +74,7 @@ def sample_hotspot_distribution(
     sql = (
         "WITH agg AS ("
         " SELECT PULocationID, DOLocationID, COUNT(*) AS trips"
-        f"   FROM '{PARQUET_GLOB}'"
+        "   FROM taxi_data"
         "  GROUP BY 1,2"
         ") "
         "SELECT PULocationID, DOLocationID, trips,"
