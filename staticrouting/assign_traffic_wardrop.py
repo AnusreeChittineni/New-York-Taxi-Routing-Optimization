@@ -1,36 +1,38 @@
 """
-static_assignment_wardrop.py
+static_assignment_wardrop_modes.py
 
-Perform a simple static traffic assignment on the NYC road network using Wardrop's
-first principle (user equilibrium, UE):
+Static traffic assignment on the NYC road network with:
 
-- Users (trips) choose routes that minimize their perceived travel times.
-- At UE, no user can unilaterally switch to a faster route.
+- Wardrop's first principle: User Equilibrium (UE)
+- Wardrop's second principle: System Optimal (SO)
 
-This script:
+UE: users minimize their own travel times (shortest-path on link travel times).
+SO: users are routed to minimize total system travel time (shortest-path on link
+    marginal costs, i.e., derivative of total cost w.r.t. flow).
 
-1. Downloads (or loads from cache) the NYC road network with free-flow travel times.
-2. Samples N trips from a NYC TLC taxi DuckDB table and builds an O-D demand set.
-3. Runs a link-based user-equilibrium assignment using a basic BPR volume-delay function.
-4. Optionally removes a road segment (by OSM ID) from the network before assignment.
-5. Reports the average UE travel time across all sampled trips.
+Script:
 
-This is a pedagogical implementation; it is not tuned for city-scale production use.
+1. Loads/downloads the NYC drive network with free-flow times and capacities.
+2. Samples N trips from NYC TLC DuckDB table and builds O-D pairs.
+3. Runs an MSA-based assignment:
+   - UE: all-or-nothing on travel time t(v).
+   - SO: all-or-nothing on marginal cost MC(v).
+4. Optionally removes a road (by OSM way ID) before assignment.
+5. Prints the average (actual) travel time over all sampled trips.
 
 Usage example:
 
-    python static_assignment_wardrop.py \
+    python static_assignment_wardrop_modes.py \
         --duckdb /path/to/nyc_taxi.duckdb \
         --trips_table yellow_2024 \
         --sample_size 5000 \
-        --graph_cache ./nyc_graph.graphml
+        --mode ue
 
-    # With an omitted road (OSM way ID)
-    python static_assignment_wardrop.py \
+    python static_assignment_wardrop_modes.py \
         --duckdb /path/to/nyc_taxi.duckdb \
         --trips_table yellow_2024 \
         --sample_size 5000 \
-        --graph_cache ./nyc_graph.graphml \
+        --mode so \
         --omit_osmid 25161349
 
 Dependencies:
@@ -145,7 +147,6 @@ def infer_edge_capacity_vph(data) -> float:
         lanes = 1.0
     return max(base_cap * lanes, 200.0)
 
-
 # -----------------------------
 # Time helpers
 # -----------------------------
@@ -153,7 +154,6 @@ def infer_edge_capacity_vph(data) -> float:
 def ensure_datetime_series(s: pd.Series) -> pd.Series:
     dt = pd.to_datetime(s, errors="coerce", utc=True)
     return dt.dt.tz_convert(TZ)
-
 
 # -----------------------------
 # Graph building / loading
@@ -185,9 +185,10 @@ def build_or_load_graph(cache_path: Optional[str] = None) -> nx.MultiDiGraph:
             cap = float(infer_edge_capacity_vph(data))
             data["capacity_vph"] = cap
 
-            # Initialize current travel time to free-flow
+            # Initialize current travel time and flow
             data["time"] = data["t0"]
             data["flow"] = 0.0
+            data["mcost"] = data["t0"]  # marginal cost placeholder
 
         if cache_path:
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
@@ -204,9 +205,10 @@ def build_or_load_graph(cache_path: Optional[str] = None) -> nx.MultiDiGraph:
                     data[key] = 0.0
         if "time" not in data:
             data["time"] = data.get("t0", 1.0)
+        if "mcost" not in data:
+            data["mcost"] = data.get("t0", 1.0)
         data["flow"] = float(data.get("flow", 0.0))
     return G
-
 
 # -----------------------------
 # Optional: remove a road by OSM ID
@@ -215,7 +217,7 @@ def build_or_load_graph(cache_path: Optional[str] = None) -> nx.MultiDiGraph:
 def remove_road_by_osmid(G: nx.MultiDiGraph, osmid_to_remove: int) -> None:
     """
     Remove all edges whose OSM way ID matches osmid_to_remove.
-    Note: OSMnx edges may have osmid as scalar or list.
+    OSMnx edges may have osmid as scalar or list.
     """
     print(f"[Graph] Removing road with osmid={osmid_to_remove} (if present)")
     to_remove = []
@@ -232,7 +234,6 @@ def remove_road_by_osmid(G: nx.MultiDiGraph, osmid_to_remove: int) -> None:
         G.remove_edge(u, v, key=k)
 
     print(f"[Graph] Removed {len(to_remove)} edges with osmid={osmid_to_remove}")
-
 
 # -----------------------------
 # Demand: sample trips from DuckDB
@@ -257,7 +258,6 @@ def sample_od_pairs(
     con = duckdb.connect(duckdb_path, read_only=True)
     print(f"[Demand] Sampling {sample_size} trips from {trips_table}")
 
-    # Using DuckDB's TABLESAMPLE for random sampling
     query = f"""
         SELECT
             {pickup_lat_col}  AS pu_lat,
@@ -302,29 +302,50 @@ def sample_od_pairs(
 
     return od_pairs
 
-
 # -----------------------------
-# User equilibrium assignment
+# Cost functions: UE vs SO
 # -----------------------------
 
 def bpr_travel_time(t0: float, flow_vph: float, capacity_vph: float, alpha=0.15, beta=4.0) -> float:
     """
     Bureau of Public Roads (BPR) volume-delay function:
-        t = t0 * (1 + alpha * (v/c)^beta)
+        t(v) = t0 * (1 + alpha * (v/c)^beta)
     """
     if capacity_vph <= 0:
         return t0
     x = max(flow_vph / capacity_vph, 0.0)
     return t0 * (1.0 + alpha * (x ** beta))
 
+def bpr_marginal_cost(t0: float, flow_vph: float, capacity_vph: float, alpha=0.15, beta=4.0) -> float:
+    """
+    Marginal cost for BPR:
+        MC(v) = d/dv [ v * t(v) ]  = t(v) + v * dt/dv
+
+    For BPR:
+        t(v) = t0 (1 + alpha (v/c)^beta)
+        dt/dv = t0 * alpha * beta / c * (v/c)^(beta-1)
+
+      => MC(v) = t0 * [ 1 + alpha (1 + beta) (v/c)^beta ]
+    """
+    if capacity_vph <= 0:
+        return t0
+    x = max(flow_vph / capacity_vph, 0.0)
+    return t0 * (1.0 + alpha * (1.0 + beta) * (x ** beta))
+
+# -----------------------------
+# All-or-nothing assignment
+# -----------------------------
 
 def all_or_nothing_assignment(
-    G: nx.MultiDiGraph, od_pairs: List[Tuple[int, int]], weight_attr: str = "time"
+    G: nx.MultiDiGraph,
+    od_pairs: List[Tuple[int, int]],
+    weight_attr: str,
 ) -> Dict[Tuple[int, int, int], float]:
     """
     Perform an all-or-nothing (AON) assignment:
-    For each OD pair, place all flow on the current shortest path.
-    Returns a dict (u, v, k) -> flow (veh/h), assuming each OD = 1 veh/h.
+    For each OD pair, place all flow on the current shortest path using weight_attr.
+
+    Returns: dict (u, v, k) -> flow (veh/h), assuming each OD = 1 veh/h.
     """
     aux_flow = {(u, v, k): 0.0 for (u, v, k) in G.edges(keys=True)}
     for (o, d) in od_pairs:
@@ -333,7 +354,6 @@ def all_or_nothing_assignment(
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             continue
         for u, v in zip(path[:-1], path[1:]):
-            # choose key with minimal current weight
             keys = list(G[u][v].keys())
             if not keys:
                 continue
@@ -343,51 +363,68 @@ def all_or_nothing_assignment(
             aux_flow[(u, v, k)] += 1.0  # 1 vehicle per OD
     return aux_flow
 
+# -----------------------------
+# UE / SO assignment via MSA
+# -----------------------------
 
-def user_equilibrium_assignment(
+def msa_assignment(
     G: nx.MultiDiGraph,
     od_pairs: List[Tuple[int, int]],
+    mode: str = "ue",
     max_iters: int = 20,
     tol: float = 1e-3,
 ) -> None:
     """
-    Perform a simple UE assignment using Method of Successive Averages (MSA).
+    MSA-based assignment:
 
-    - Initialize flows with an AON on free-flow times (t0).
-    - Repeat:
-        - update link travel times with BPR function
-        - compute AON on current times
-        - MSA update of flows
+    mode = "ue": Wardrop 1st principle (User Equilibrium)
+        - route on link travel times t(v) via BPR.
+    mode = "so": Wardrop 2nd principle (System Optimal)
+        - route on link marginal costs MC(v), but actual travel times are t(v).
 
     Flows are stored in G[u][v][k]['flow'] (veh/h).
-    Current travel times are in G[u][v][k]['time'] (seconds).
+    Travel times in G[u][v][k]['time'] (seconds).
+    Marginal costs in G[u][v][k]['mcost'] (seconds).
     """
-    print("[UE] Initial all-or-nothing on free-flow times")
-    # Initialize flows at zero
+    mode = mode.lower()
+    if mode not in {"ue", "so"}:
+        raise ValueError("mode must be 'ue' or 'so'")
+
+    print(f"[MSA] Mode = {mode.upper()}")
+
+    # Initialize
     for u, v, k, data in G.edges(keys=True, data=True):
         data["flow"] = 0.0
         data["time"] = float(data.get("t0", 1.0))
+        data["mcost"] = float(data.get("t0", 1.0))
 
-    # First AON on free-flow
+    # Initial all-or-nothing on free-flow travel times
+    print("[MSA] Initial all-or-nothing on free-flow times")
     aux_flow = all_or_nothing_assignment(G, od_pairs, weight_attr="t0")
     for (u, v, k), f in aux_flow.items():
         G[u][v][k]["flow"] = f
 
     for it in range(1, max_iters + 1):
-        print(f"[UE] Iteration {it}/{max_iters}")
+        print(f"[MSA] Iteration {it}/{max_iters}")
 
-        # 1) Update travel times with BPR
+        # 1) Update link travel times t(v) and marginal costs
         for u, v, k, data in G.edges(keys=True, data=True):
             t0 = float(data.get("t0", 1.0))
             cap = float(data.get("capacity_vph", 800.0))
             flow = float(data.get("flow", 0.0))
-            data["time"] = bpr_travel_time(t0, flow, cap)
 
-        # 2) AON on current times
-        aux_flow = all_or_nothing_assignment(G, od_pairs, weight_attr="time")
+            t = bpr_travel_time(t0, flow, cap)
+            mc = bpr_marginal_cost(t0, flow, cap)
 
-        # 3) MSA step: flow^{k+1} = flow^k + (1/k) * (aux - flow^k)
-        step = 1.0 / float(it + 1)  # can also use 1/it; we start from it=1 after initial
+            data["time"] = t
+            data["mcost"] = mc
+
+        # 2) All-or-nothing on chosen cost
+        weight_attr = "time" if mode == "ue" else "mcost"
+        aux_flow = all_or_nothing_assignment(G, od_pairs, weight_attr=weight_attr)
+
+        # 3) MSA update
+        step = 1.0 / float(it + 1)  # conservative stepsize
         max_delta = 0.0
         for u, v, k, data in G.edges(keys=True, data=True):
             f_old = float(data.get("flow", 0.0))
@@ -396,21 +433,23 @@ def user_equilibrium_assignment(
             data["flow"] = f_new
             max_delta = max(max_delta, abs(f_new - f_old))
 
-        print(f"[UE]   max flow change = {max_delta:.4f}")
+        print(f"[MSA]   max flow change = {max_delta:.4f}")
         if max_delta < tol:
-            print("[UE] Converged under tolerance")
+            print("[MSA] Converged under tolerance")
             break
 
-
 # -----------------------------
-# Compute average UE travel time for sampled trips
+# Compute average actual travel time
 # -----------------------------
 
 def compute_average_travel_time(
-    G: nx.MultiDiGraph, od_pairs: List[Tuple[int, int]], weight_attr: str = "time"
+    G: nx.MultiDiGraph,
+    od_pairs: List[Tuple[int, int]],
+    weight_attr: str = "time",
 ) -> float:
     """
     Compute the average travel time across all OD pairs using current edge times.
+    (Regardless of UE/SO mode, we measure *actual* travel time using 'time'.)
     """
     total_time = 0.0
     count = 0
@@ -434,15 +473,14 @@ def compute_average_travel_time(
         return float("nan")
     return total_time / count
 
-
 # -----------------------------
 # Main CLI
 # -----------------------------
 
 def main():
-    ap = argparse.ArgumentParser(description="Static UE assignment on NYC using Wardrop's first principle")
+    ap = argparse.ArgumentParser(description="Static UE/SO assignment on NYC (Wardrop principles)")
     ap.add_argument("--duckdb", required=True, help="Path to DuckDB file with NYC TLC trips")
-    ap.add_argument("--trips_table", required=True, help="Trip table name in DuckDB (e.g., yellow_2024)")
+    ap.add_argument("--trips_table", required=True, help="Trip table name (e.g., yellow_2024)")
     ap.add_argument("--sample_size", type=int, default=5000, help="Number of trips to sample for OD demand")
     ap.add_argument("--pickup_col", default="tpep_pickup_datetime", help="Pickup datetime column")
     ap.add_argument("--dropoff_col", default="tpep_dropoff_datetime", help="Dropoff datetime column")
@@ -450,10 +488,11 @@ def main():
     ap.add_argument("--pickup_lng_col", default="pickup_longitude", help="Pickup longitude column")
     ap.add_argument("--dropoff_lat_col", default="dropoff_latitude", help="Dropoff latitude column")
     ap.add_argument("--dropoff_lng_col", default="dropoff_longitude", help="Dropoff longitude column")
-    ap.add_argument("--graph_cache", default="./nyc_ue_graph.graphml", help="Path to cache the OSMnx graph")
+    ap.add_argument("--graph_cache", default="./nyc_wardrop.graphml", help="Path to cache the OSMnx graph")
     ap.add_argument("--omit_osmid", type=int, default=None, help="Optional OSM way id of road to remove")
-    ap.add_argument("--max_iters", type=int, default=20, help="Maximum UE iterations")
+    ap.add_argument("--max_iters", type=int, default=20, help="Maximum MSA iterations")
     ap.add_argument("--tol", type=float, default=1e-3, help="Flow-change convergence tolerance")
+    ap.add_argument("--mode", choices=["ue", "so"], default="ue", help="Assignment mode: ue=user equilibrium, so=system optimal")
     args = ap.parse_args()
 
     # 1. Build/load graph
@@ -462,7 +501,6 @@ def main():
     # 2. Optionally remove an OSM way from the graph
     if args.omit_osmid is not None:
         remove_road_by_osmid(G, args.omit_osmid)
-
     # 3. Build OD demands from sampled trips
     od_pairs = sample_od_pairs(
         duckdb_path=args.duckdb,
@@ -477,15 +515,18 @@ def main():
         G=G,
     )
 
-    # 4. Run UE assignment
-    user_equilibrium_assignment(G, od_pairs, max_iters=args.max_iters, tol=args.tol)
+    # 4. Run assignment (UE or SO)
+    msa_assignment(G, od_pairs, mode=args.mode, max_iters=args.max_iters, tol=args.tol)
 
-    # 5. Compute average UE travel time
+    # 5. Compute average *actual* travel time using 'time'
     avg_time_s = compute_average_travel_time(G, od_pairs, weight_attr="time")
     if math.isnan(avg_time_s):
-        print("Average UE travel time: NaN (no usable OD paths)")
+        print("Average travel time: NaN (no usable OD paths)")
     else:
-        print(f"Average UE travel time at user equilibrium (over {len(od_pairs)} trips): {avg_time_s:.2f} seconds")
+        print(
+            f"Average travel time at {args.mode.upper()} (over {len(od_pairs)} trips): "
+            f"{avg_time_s:.2f} seconds"
+        )
 
 if __name__ == "__main__":
     main()
