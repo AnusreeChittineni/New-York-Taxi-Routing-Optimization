@@ -43,3 +43,9 @@ results/*.csv
 # DuckDB temp files
 *.duckdb.wal
 *.duckdb
+
+data/*.pbf
+data/*.pt
+data/*.graph
+*.pt
+*.pbf

@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    data = torch.load(args.graph_path)
+    data = torch.load(args.graph_path, weights_only=False)
     num_nodes = data.num_nodes
     num_edges = data.edge_index.size(1)
     device = detect_device()
@@ -97,7 +97,8 @@ def main() -> None:
     if len(samples) > args.sample_count:
         samples = random.sample(samples, args.sample_count)
 
-    model = build_model(data.num_node_features, args.hidden_channels)
+    edge_dim = data.edge_attr.size(-1) if getattr(data, "edge_attr", None) is not None else 0
+    model = build_model(data.num_node_features, args.hidden_channels, edge_attr_dim=edge_dim)
     state = torch.load(args.model_path, map_location="cpu")
     model.load_state_dict(state)
     model.to(device)

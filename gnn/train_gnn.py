@@ -80,6 +80,13 @@ def train_val_split(samples: List[TripSample], val_ratio: float, seed: int = 42)
     return shuffled[:cutoff], shuffled[cutoff:]
 
 
+def limit_samples(samples: List[TripSample], count: int, seed: int = 42) -> List[TripSample]:
+    if count <= 0 or count >= len(samples):
+        return samples
+    rng = random.Random(seed)
+    return rng.sample(samples, count)
+
+
 def select_policy_weights(
     scores: List[float], policy: str, epsilon: float, temperature: float, device: torch.device
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
@@ -154,6 +161,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-path", type=str, default="models/gnn_trained.pth")
     parser.add_argument("--trip-limit", type=int, default=50_000)
     parser.add_argument("--val-ratio", type=float, default=0.2)
+    parser.add_argument("--train-sample-count", type=int, default=10_000)
+    parser.add_argument("--val-sample-count", type=int, default=1_000)
     parser.add_argument("--train-samples-path", type=str, default=None)
     parser.add_argument("--val-samples-path", type=str, default=None)
     parser.add_argument("--K-CANDS", type=int, default=8)
@@ -178,7 +187,7 @@ def main() -> None:
     np.random.seed(42)
     torch.manual_seed(42)
 
-    data = torch.load(args.graph_path)
+    data = torch.load(args.graph_path, weights_only=False)
     if not hasattr(data, "edge_index"):
         raise ValueError("Graph file must contain edge_index")
 
@@ -193,11 +202,15 @@ def main() -> None:
         raw_samples = build_trip_samples(num_nodes, args.trip_limit, args.db_path)
         train_samples, val_samples = train_val_split(raw_samples, args.val_ratio)
 
+    train_samples = limit_samples(train_samples, args.train_sample_count)
+    val_samples = limit_samples(val_samples, args.val_sample_count)
+
     training_policy = args.POLICY if args.policy_mode == "complex" else "greedy"
     k_candidates = args.K_CANDS if args.policy_mode == "complex" else min(3, args.K_CANDS)
     diversity_penalty = 0.1 if args.policy_mode == "complex" else 0.0
 
-    model = build_model(data.num_node_features, args.hidden_channels).to(device)
+    edge_dim = data.edge_attr.size(-1) if getattr(data, "edge_attr", None) is not None else 0
+    model = build_model(data.num_node_features, args.hidden_channels, edge_attr_dim=edge_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     G = build_nx_from_pyg(data.cpu())
     schedule_fn = linear_anneal if args.anneal == "linear" else cosine_anneal

@@ -7,6 +7,7 @@ from typing import Optional
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 from torch_geometric.nn import SAGEConv
 
 
@@ -29,7 +30,14 @@ def detect_device(preferred: Optional[str] = None) -> torch.device:
 class TravelTimeGNN(nn.Module):
     """Simple GraphSAGE stack for per-edge travel time prediction."""
 
-    def __init__(self, in_channels: int, hidden_channels: int, out_channels: int = 1, num_layers: int = 3):
+    def __init__(
+        self,
+        in_channels: int,
+        hidden_channels: int,
+        out_channels: int = 1,
+        num_layers: int = 3,
+        edge_attr_dim: int = 0,
+    ):
         super().__init__()
         layers = []
         input_dim = in_channels
@@ -39,8 +47,9 @@ class TravelTimeGNN(nn.Module):
         layers.append(SAGEConv(input_dim, hidden_channels))
         self.convs = nn.ModuleList(layers)
         self.dropout = nn.Dropout(p=0.15)
+        edge_input_dim = hidden_channels * 2 + edge_attr_dim
         self.edge_mlp = nn.Sequential(
-            nn.Linear(hidden_channels * 2, hidden_channels),
+            nn.Linear(edge_input_dim, hidden_channels),
             nn.ReLU(),
             nn.Linear(hidden_channels, out_channels),
         )
@@ -54,16 +63,20 @@ class TravelTimeGNN(nn.Module):
             x = conv(x, edge_index).relu()
             x = self.dropout(x)
         src, dst = edge_index
-        edge_feat = torch.cat([x[src], x[dst], edge_attr], dim=-1) if edge_attr.numel() else torch.cat(
-            [x[src], x[dst]], dim=-1
-        )
-        return self.edge_mlp(edge_feat).squeeze(-1)
+        if edge_attr is not None and edge_attr.numel():
+            edge_feat = torch.cat([x[src], x[dst], edge_attr], dim=-1)
+        else:
+            edge_feat = torch.cat([x[src], x[dst]], dim=-1)
+        raw = self.edge_mlp(edge_feat).squeeze(-1)
+        return F.softplus(raw) + 1e-3
 
 
-def build_model(in_channels: int, hidden_channels: int, out_channels: int = 1) -> TravelTimeGNN:
+def build_model(
+    in_channels: int, hidden_channels: int, out_channels: int = 1, edge_attr_dim: int = 0
+) -> TravelTimeGNN:
     """Factory for TravelTimeGNN."""
 
-    return TravelTimeGNN(in_channels, hidden_channels, out_channels)
+    return TravelTimeGNN(in_channels, hidden_channels, out_channels, edge_attr_dim=edge_attr_dim)
 
 
 def save_model(model: nn.Module, path: str | Path) -> None:
@@ -73,10 +86,12 @@ def save_model(model: nn.Module, path: str | Path) -> None:
     torch.save(model.state_dict(), path)
 
 
-def load_model(path: str | Path, in_channels: int, hidden_channels: int, out_channels: int = 1) -> TravelTimeGNN:
+def load_model(
+    path: str | Path, in_channels: int, hidden_channels: int, out_channels: int = 1, edge_attr_dim: int = 0
+) -> TravelTimeGNN:
     """Load model weights into a new instance."""
 
-    model = build_model(in_channels, hidden_channels, out_channels)
+    model = build_model(in_channels, hidden_channels, out_channels, edge_attr_dim=edge_attr_dim)
     state = torch.load(path, map_location="cpu")
     model.load_state_dict(state)
     return model
