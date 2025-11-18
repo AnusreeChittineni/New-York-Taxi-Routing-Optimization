@@ -1,41 +1,111 @@
-# New-York-Taxi-Routing-Optimization Data Set Up
+# New York Taxi Routing Optimization Data Setup
 
 This guide explains how to set up all datasets used in this project, including how to acquire raw data from NYC Open Data and build the local DuckDB database for analysis.
 
-## Datasets
+---
 
-2016 Yellow Taxi Trip Data: 
-Loads from TLC parquet files 
+## 📊 Datasets
 
-Automated Traffic Volume Counts: 
-Go to this link - https://data.cityofnewyork.us/Transportation/Automated-Traffic-Volume-Counts/7ym2-wayt/about_data 
-Select export in the upper right corner and download the csv
+### 1. 2016 Yellow Taxi Trip Data
+Loads from TLC parquet files directly.
 
-Motor Vehicle Collisions - Crashes: 
-Go to this link - https://data.cityofnewyork.us/Public-Safety/Motor-Vehicle-Collisions-Crashes/h9gi-nx95/about_data
-Select export in the upper right corner and download the csv
+### 2. Automated Traffic Volume Counts
+1. Go to [NYC Open Data - Automated Traffic Volume Counts](https://data.cityofnewyork.us/Transportation/Automated-Traffic-Volume-Counts/7ym2-wayt/about_data)
+2. Select **Export** in the upper right corner
+3. Download the CSV file
 
-## Loading Data
+### 3. Motor Vehicle Collisions - Crashes
+1. Go to [NYC Open Data - Motor Vehicle Collisions](https://data.cityofnewyork.us/Public-Safety/Motor-Vehicle-Collisions-Crashes/h9gi-nx95/about_data)
+2. Select **Export** in the upper right corner
+3. Download the CSV file
 
-### Conda Environment
+---
 
-Make a new conda environment
-run pip install -r requirements.txt   
+## 🔧 Loading Data
 
-### Setting up local persistent duckdb
+### Conda Environment Setup
 
-run load_data.py
+1. Create a new conda environment:
+```bash
+conda create -n nyc-taxi python=3.9
+conda activate nyc-taxi
+```
 
-python data\load_data.py
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-You will now have a duckdb file
+### Setting up Local Persistent DuckDB
 
-If needed, we will need to store the duckdb file elsewhere (i.e. S3 bucket) if we are actively making changes that need to build off of one another dynamcially and can't depend on each us running scripts on our end
+Run the data loading script:
 
-## Merging Data
+```bash
+python data/load_data.py
+```
 
-IN PROGRESS!
+You will now have a DuckDB file in your local directory.
 
-run python data/merge_data.py 
+> **Note:** If needed, we may store the DuckDB file elsewhere (e.g., S3 bucket) if we are actively making changes that need to build off of one another dynamically and can't depend on each person running scripts independently.
 
+---
 
+## 🔀 Merging Data
+
+> **⚠️ IN PROGRESS!**
+
+Run the merge script:
+
+```bash
+python data/merge_data.py
+```
+
+---
+
+## 📁 Project Structure
+
+```
+.
+├── data/
+│   ├── load_data.py          # Data loading script
+│   ├── merge_data.py          # Data merging script (in progress)
+│   └── raw/                   # Raw CSV files
+├── requirements.txt           # Python dependencies
+└── README.md                  # This file
+```
+
+---
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+**Issue:** `FileNotFoundError` when running `load_data.py`
+- **Solution:** Ensure all CSV files are downloaded and placed in the correct directory
+
+**Issue:** DuckDB connection errors
+- **Solution:** Check that you have write permissions in the directory
+
+**Issue:** Memory errors during data loading
+- **Solution:** Consider processing data in chunks or increasing available memory
+
+---
+
+## 📝 Next Steps
+
+After setting up the database:
+1. Verify data integrity with basic queries
+2. Explore the merged dataset structure
+3. Proceed to the GNN model training phase
+
+---
+
+## 🤝 Contributing
+
+If you encounter issues with data setup or have improvements to suggest, please open an issue or submit a pull request.
+
+---
+
+## 📧 Support
+
+For questions about data setup, please [open an issue](../../issues) in the repository.
