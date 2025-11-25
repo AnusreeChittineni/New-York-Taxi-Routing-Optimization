@@ -1,0 +1,22 @@
+name: traffic_sim
+channels:
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - python=3.10
+  - scipy
+  - numpy
+  - geopandas
+  - matplotlib
+  - pandas
+  - scikit-learn
+  - requests
+  - seaborn
+  - pyarrow
+  - networkx
+  - shapely
+  - tqdm
+  - osmnx
+  - rich
+  - folium
+prefix: /opt/homebrew/Caskroom/miniconda/base/envs/traffic_sim

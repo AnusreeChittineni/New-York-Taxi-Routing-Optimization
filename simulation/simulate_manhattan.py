@@ -225,21 +225,27 @@ def prepare_aequilibrae_objects(
 
 
 def run_assignment(
-    edges: gpd.GeoDataFrame, od_matrix: pd.DataFrame, console: Optional[Console] = None
+    edges: gpd.GeoDataFrame,
+    od_matrix: pd.DataFrame,
+    console: Optional[Console] = None,
+    bpr_params: Optional[Dict[str, float]] = None,
+    algorithm: str = "bfw",
+    max_iter: int = 40,
 ) -> AssignmentOutputs:
     """Execute a UE traffic assignment using AequilibraE."""
 
+    bpr_params = bpr_params or {"alpha": 0.15, "beta": 4.0}
     graph, demand_matrix, matrix_name = prepare_aequilibrae_objects(edges, od_matrix)
     traffic_class = TrafficClass("autos", graph, demand_matrix)
 
     assignment = TrafficAssignment()
     assignment.set_classes([traffic_class])
     assignment.set_vdf("BPR")
-    assignment.set_vdf_parameters({"alpha": 0.15, "beta": 4.0})
+    assignment.set_vdf_parameters(bpr_params)
     assignment.set_capacity_field("capacity")
     assignment.set_time_field("free_flow_time")
-    assignment.set_algorithm("bfw")
-    assignment.max_iter = 40
+    assignment.set_algorithm(algorithm)
+    assignment.max_iter = max_iter
     assignment.rgap_target = 1e-4
     assignment.execute()
 

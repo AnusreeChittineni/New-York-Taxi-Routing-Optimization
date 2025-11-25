@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List
+import os
+import pickle
+from typing import Dict, Iterable, List, Tuple
 
 import networkx as nx
 import torch
+from joblib import Parallel, delayed
 from torch_geometric.data import Data
+from tqdm import tqdm
 
 
 def build_nx_from_pyg(data: Data, weight_name: str = "time") -> nx.DiGraph:
@@ -66,3 +70,46 @@ def path_edge_mask(edge_ids: Iterable[int], num_edges: int) -> torch.BoolTensor:
     idx = torch.tensor(list(edge_ids), dtype=torch.long)
     mask[idx] = True
     return mask
+
+
+def _single_pair_k_paths(
+    G: nx.DiGraph, u: int, v: int, k: int, weight: str, diversity_penalty: float | None
+) -> Tuple[int, int, List[List[int]]]:
+    """Helper for parallel execution."""
+    paths = k_shortest_paths(G, u, v, k, weight, diversity_penalty)
+    return u, v, paths
+
+
+def precompute_paths(
+    G: nx.DiGraph,
+    samples: List[Tuple[int, int, float]],
+    k: int = 8,
+    weight: str = "time",
+    diversity_penalty: float | None = None,
+    cache_path: str | None = None,
+    n_jobs: int = -1,
+) -> Dict[Tuple[int, int], List[List[int]]]:
+    """Precompute K-shortest paths for all OD pairs in samples, with caching."""
+    
+    if cache_path and os.path.exists(cache_path):
+        print(f"Loading precomputed paths from {cache_path}...")
+        with open(cache_path, "rb") as f:
+            return pickle.load(f)
+
+    # Unique OD pairs
+    od_pairs = list(set((s[0], s[1]) for s in samples))
+    print(f"Precomputing paths for {len(od_pairs)} unique OD pairs (k={k})...")
+
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(_single_pair_k_paths)(G, u, v, k, weight, diversity_penalty)
+        for u, v in tqdm(od_pairs, desc="Generating Paths")
+    )
+
+    path_cache = {(u, v): p for u, v, p in results}
+
+    if cache_path:
+        print(f"Saving paths to {cache_path}...")
+        with open(cache_path, "wb") as f:
+            pickle.dump(path_cache, f)
+
+    return path_cache

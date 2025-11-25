@@ -1,5 +1,11 @@
 # 🚦 NYC Graph Neural Network Traffic Simulation & Optimization
 
+> [!TIP]
+> **Need information fast?**
+> - Check out the [**Quick Reference Guide**](QUICK_REFERENCE.md) for a summary of commands and architecture.
+> - Use the search tool: `python doc_search.py "search term"`
+
+
 ## Overview
 
 This project builds an intelligent **traffic simulation and optimization framework** for Manhattan using:

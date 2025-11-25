@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import random
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
@@ -29,7 +30,7 @@ from gnn.exploration_policy import (
     softmax_sample,
 )
 from gnn.gnn_model import build_model, detect_device, save_model
-from gnn.routing import build_nx_from_pyg, k_shortest_paths, path_edge_mask
+from gnn.routing import build_nx_from_pyg, k_shortest_paths, path_edge_mask, precompute_paths
 
 
 TripSample = Tuple[int, int, float]
@@ -152,7 +153,7 @@ def evaluate_rmse(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train GNN with candidate-route sampling.")
-    parser.add_argument("--graph-path", type=str, default="data/manhattan_graph.pt")
+    parser.add_argument("--graph-path", type=str, default="data/nyc_graph.pt")
     parser.add_argument("--db-path", type=str, default="data/nyc_traffic_2016.duckdb")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -178,6 +179,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--LOSS", type=str, default="huber", choices=["mse", "huber"])
     parser.add_argument("--anneal", type=str, default="linear", choices=["linear", "cosine"])
     parser.add_argument("--rmse-eval-samples", type=int, default=500)
+    parser.add_argument("--cache-dir", type=str, default="cache", help="Directory to store path caches")
     return parser.parse_args()
 
 
@@ -216,6 +218,21 @@ def main() -> None:
     schedule_fn = linear_anneal if args.anneal == "linear" else cosine_anneal
     global_step = 0
 
+    os.makedirs(args.cache_dir, exist_ok=True)
+    cache_file = os.path.join(args.cache_dir, f"paths_k{k_candidates}_p{args.policy_mode}.pkl")
+    
+    # Precompute paths using static weights (distance/free-flow)
+    # Note: We use the initial graph state. If edge weights evolve significantly, 
+    # one might want to re-compute periodically, but for speed we do it once.
+    path_cache = precompute_paths(
+        G, 
+        train_samples + val_samples, 
+        k=k_candidates, 
+        weight="time", # Assumes 'time' is in G from build_nx_from_pyg
+        diversity_penalty=diversity_penalty,
+        cache_path=cache_file
+    )
+
     data = data.to(device)
 
     for epoch in range(1, args.epochs + 1):
@@ -228,16 +245,17 @@ def main() -> None:
             model.train()
             optimizer.zero_grad()
             edge_pred = model(data)
-            update_graph_costs(G, edge_pred)
+            # update_graph_costs(G, edge_pred) # No longer updating graph for routing per step!
+            
             batch_losses = []
             entropy_bonus = 0.0
 
             for origin, dest, obs_time in batch:
                 epsilon = schedule_fn(global_step, args.EPS_START, args.EPS_END, args.EPS_STEPS)
                 tau = schedule_fn(global_step, args.TAU_START, args.TAU_END, args.TAU_STEPS)
-                paths = k_shortest_paths(
-                    G, origin, dest, k=k_candidates, weight="time", diversity_penalty=diversity_penalty
-                )
+                
+                # Retrieve precomputed paths
+                paths = path_cache.get((origin, dest), [])
                 if not paths:
                     continue
 
