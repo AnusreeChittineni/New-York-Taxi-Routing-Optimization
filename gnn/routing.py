@@ -99,6 +99,8 @@ def precompute_paths(
                 path_cache = pickle.load(f)
         except Exception as e:
             print(f"Warning: Could not load cache ({e}). Starting fresh.")
+    
+    print(f"Checking checkpoints... Found {len(path_cache)} paths already computed.")
 
     # Unique OD pairs
     all_od_pairs = list(set((s[0], s[1]) for s in samples))
