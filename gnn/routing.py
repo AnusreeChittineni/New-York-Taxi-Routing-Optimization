@@ -112,25 +112,26 @@ def precompute_paths(
 
     print(f"Precomputing paths for {len(missing_pairs)} missing OD pairs (k={k})...")
     
-    chunk_size = 1000
+    chunk_size = 200
     # Process in chunks to allow checkpointing
-    for i in range(0, len(missing_pairs), chunk_size):
-        chunk = missing_pairs[i : i + chunk_size]
-        
-        results = Parallel(n_jobs=n_jobs)(
-            delayed(_single_pair_k_paths)(G, u, v, k, weight, diversity_penalty)
-            for u, v in tqdm(chunk, desc=f"Generating Paths (Chunk {i//chunk_size + 1})", leave=False)
-        )
-        
-        for u, v, p in results:
-            path_cache[(u, v)] = p
+    with Parallel(n_jobs=n_jobs) as parallel:
+        for i in range(0, len(missing_pairs), chunk_size):
+            chunk = missing_pairs[i : i + chunk_size]
             
-        if cache_path:
-            # Atomic write (write to temp then rename) to prevent corruption
-            temp_path = cache_path + ".tmp"
-            with open(temp_path, "wb") as f:
-                pickle.dump(path_cache, f)
-            os.replace(temp_path, cache_path)
-            # print(f"Checkpoint saved to {cache_path}")
+            results = parallel(
+                delayed(_single_pair_k_paths)(G, u, v, k, weight, diversity_penalty)
+                for u, v in tqdm(chunk, desc=f"Generating Paths (Chunk {i//chunk_size + 1})", leave=False)
+            )
+            
+            for u, v, p in results:
+                path_cache[(u, v)] = p
+                
+            if cache_path:
+                # Atomic write (write to temp then rename) to prevent corruption
+                temp_path = cache_path + ".tmp"
+                with open(temp_path, "wb") as f:
+                    pickle.dump(path_cache, f)
+                os.replace(temp_path, cache_path)
+                # print(f"Checkpoint saved to {cache_path}")
 
     return path_cache
