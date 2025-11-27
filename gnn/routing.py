@@ -91,25 +91,44 @@ def precompute_paths(
 ) -> Dict[Tuple[int, int], List[List[int]]]:
     """Precompute K-shortest paths for all OD pairs in samples, with caching."""
     
+    path_cache = {}
     if cache_path and os.path.exists(cache_path):
         print(f"Loading precomputed paths from {cache_path}...")
-        with open(cache_path, "rb") as f:
-            return pickle.load(f)
+        try:
+            with open(cache_path, "rb") as f:
+                path_cache = pickle.load(f)
+        except Exception as e:
+            print(f"Warning: Could not load cache ({e}). Starting fresh.")
 
     # Unique OD pairs
-    od_pairs = list(set((s[0], s[1]) for s in samples))
-    print(f"Precomputing paths for {len(od_pairs)} unique OD pairs (k={k})...")
+    all_od_pairs = list(set((s[0], s[1]) for s in samples))
+    missing_pairs = [pair for pair in all_od_pairs if pair not in path_cache]
+    
+    if not missing_pairs:
+        print("All paths already cached.")
+        return path_cache
 
-    results = Parallel(n_jobs=n_jobs)(
-        delayed(_single_pair_k_paths)(G, u, v, k, weight, diversity_penalty)
-        for u, v in tqdm(od_pairs, desc="Generating Paths")
-    )
-
-    path_cache = {(u, v): p for u, v, p in results}
-
-    if cache_path:
-        print(f"Saving paths to {cache_path}...")
-        with open(cache_path, "wb") as f:
-            pickle.dump(path_cache, f)
+    print(f"Precomputing paths for {len(missing_pairs)} missing OD pairs (k={k})...")
+    
+    chunk_size = 1000
+    # Process in chunks to allow checkpointing
+    for i in range(0, len(missing_pairs), chunk_size):
+        chunk = missing_pairs[i : i + chunk_size]
+        
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(_single_pair_k_paths)(G, u, v, k, weight, diversity_penalty)
+            for u, v in tqdm(chunk, desc=f"Generating Paths (Chunk {i//chunk_size + 1})", leave=False)
+        )
+        
+        for u, v, p in results:
+            path_cache[(u, v)] = p
+            
+        if cache_path:
+            # Atomic write (write to temp then rename) to prevent corruption
+            temp_path = cache_path + ".tmp"
+            with open(temp_path, "wb") as f:
+                pickle.dump(path_cache, f)
+            os.replace(temp_path, cache_path)
+            # print(f"Checkpoint saved to {cache_path}")
 
     return path_cache
