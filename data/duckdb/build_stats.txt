@@ -20,3 +20,18 @@ Taxi Stats:
 Unique pickup locations: 263
 Unique dropoff locations: 264
 Average trip distance: 4.959114435961589
+
+Loading trip sample...
+Running distance threshold matching...
+Computing congestion reduction...
+
+=== Carpool Matches ===
+   tripA  tripB  pickup_distance_km  dropoff_distance_km  time_diff_min
+0  20235  39172            0.397727             0.382371       2.766667
+1   7873   4722            0.254957             0.150557       1.016667
+2  26911  27835            0.271373             0.088603       4.933333
+3   8328   2149            0.299944             0.097621       1.633333
+4  21202  38392            0.321096             0.379434       3.283333
+
+=== Congestion Reduction ===
+{'total_trips': 50000, 'shared_pairs': 298, 'reduced_trips': 298, 'percent_reduction': 0.596}

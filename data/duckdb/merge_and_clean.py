@@ -33,6 +33,10 @@ WHERE
 
 print("Taxi cleaned rows:", con.execute("SELECT COUNT(*) FROM taxi_clean").fetchone()[0])
 
+print("Dropping taxi_raw to free up space...")
+con.execute("DROP TABLE IF EXISTS taxi_raw;")
+print("taxi_raw dropped.")
+
 # ------------------------------------------------------------
 # CREATE TEMPORAL STREET STATUS FROM COLLISIONS
 # ------------------------------------------------------------
@@ -42,12 +46,13 @@ print("Building closed street table...")
 con.execute("""
 CREATE OR REPLACE TABLE closed_streets AS
 SELECT
-    street_upper AS street_name,
+    "ON STREET NAME" AS street_name,
     crash_datetime,
     'closed' AS status
 FROM collisions_2016
-WHERE street_upper IS NOT NULL
+WHERE "ON STREET NAME" IS NOT NULL
 """)
+
 
 print("Closed street samples:")
 print(con.execute("SELECT * FROM closed_streets LIMIT 10").fetchdf())
@@ -57,6 +62,7 @@ print(con.execute("SELECT * FROM closed_streets LIMIT 10").fetchdf())
 # ------------------------------------------------------------
 
 print("\nJoining taxi trips with road closures...")
+
 
 con.execute("""
 CREATE OR REPLACE TABLE trips_with_closures AS
