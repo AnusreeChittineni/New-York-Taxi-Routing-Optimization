@@ -1,0 +1,12 @@
+Taxi ingestion completed: 131,165,043 rows streamed
+Total rows inserted into taxi_raw: -2,624
+Total time: 4395.12 sec
+
+
+[2/3] Loading Traffic Volume Counts…
+Traffic rows loaded: 129617
+Ingestion time 0.30 sec
+
+[3/3] Loading Collision Data…
+Collision rows loaded: 229831
+Ingestion time 11.32 sec
