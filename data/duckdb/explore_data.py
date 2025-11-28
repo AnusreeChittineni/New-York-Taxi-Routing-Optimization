@@ -118,15 +118,6 @@ try:
 except Exception as e:
     print("Collision stats unavailable:", e, "\n")
 
-# --- Closed Streets ---
-try:
-    print("Closed Streets Stats:")
-    print("Number of closed segments:",
-        con.execute("SELECT COUNT(*) FROM closed_streets WHERE status = 'closed'").fetchone()[0])
-
-    print()
-except Exception as e:
-    print("Closed street stats unavailable:", e)
 
 print("\n=== Exploration Complete ===")
 
