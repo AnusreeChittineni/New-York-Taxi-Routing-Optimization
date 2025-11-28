@@ -32,24 +32,78 @@ def flush(buf, header, first, table_cols=None):
     if first:
         # First insert: create table
         con.execute("DROP TABLE IF EXISTS taxi_raw;")
-        con.execute("CREATE TABLE taxi_raw AS SELECT * FROM chunk;")
+        con.execute("""
+        CREATE TABLE taxi_raw AS
+        SELECT
+            STRPTIME(tpep_pickup_datetime, '%m/%d/%Y %I:%M:%S %p') AS tpep_pickup_datetime,
+            STRPTIME(tpep_dropoff_datetime, '%m/%d/%Y %I:%M:%S %p') AS tpep_dropoff_datetime,
+            passenger_count,
+            trip_distance,
+            pickup_longitude,
+            pickup_latitude,
+            dropoff_longitude,
+            dropoff_latitude,
+            VendorID,
+            RatecodeID,
+            store_and_fwd_flag,
+            payment_type,
+            fare_amount,
+            extra,
+            mta_tax,
+            tip_amount,
+            tolls_amount,
+            improvement_surcharge,
+            total_amount,
+            PULocationID,
+            DOLocationID
+        FROM chunk;
+        """)
+
         con.unregister("chunk")
         return False, len(df)
     else:
         # Subsequent insert
-        inserted = con.execute("INSERT INTO taxi_raw SELECT * FROM chunk;").rowcount
+        inserted = con.execute("""
+        INSERT INTO taxi_raw
+        SELECT
+            STRPTIME(tpep_pickup_datetime, '%m/%d/%Y %I:%M:%S %p') AS tpep_pickup_datetime,
+            STRPTIME(tpep_dropoff_datetime, '%m/%d/%Y %I:%M:%S %p') AS tpep_dropoff_datetime,
+            passenger_count,
+            trip_distance,
+            pickup_longitude,
+            pickup_latitude,
+            dropoff_longitude,
+            dropoff_latitude,
+            VendorID,
+            RatecodeID,
+            store_and_fwd_flag,
+            payment_type,
+            fare_amount,
+            extra,
+            mta_tax,
+            tip_amount,
+            tolls_amount,
+            improvement_surcharge,
+            total_amount,
+            PULocationID,
+            DOLocationID
+        FROM chunk;
+    """).rowcount
+
         con.unregister("chunk")
         return False, inserted
     
 def load_taxi_2016():
     tables = [t[0] for t in con.execute("SHOW TABLES").fetchall()]
-    table_exists = "taxi_raw" in tables
+    table_exists = False
 
+    """
     if table_exists:
         row_count = con.execute("SELECT COUNT(*) FROM taxi_raw").fetchone()[0]
         print(f"taxi_raw already exists with {row_count:,} rows — resuming download if needed.\n")
+    """
 
-    first = not table_exists
+    first = True
     table_cols = None
     if table_exists:
         # Get existing table columns to align future inserts
@@ -74,9 +128,9 @@ def load_taxi_2016():
             if len(buffer) >= CHUNK_SIZE:
                 first, inserted = flush(buffer, header_line, first, table_cols)
                 total_rows_streamed += len(buffer)
-                total_chunks_inserted += inserted
+                total_rows_inserted += inserted
                 buffer.clear()
-                print(f"Streamed {total_rows_streamed:,} rows, inserted {total_rows_inserted:,} chunks…")
+                print(f"Streamed {total_rows_streamed:,} rows, inserted {total_rows_inserted:,} rows...")
 
         # Flush remaining rows
         if buffer:

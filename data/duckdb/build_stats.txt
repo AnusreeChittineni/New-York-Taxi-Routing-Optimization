@@ -1,6 +1,9 @@
-Taxi ingestion completed: 131,165,043 rows streamed
+Taxi ingestion completed: 113,423,734 rows streamed
 Total rows inserted into taxi_raw: -2,624
 Total time: 4395.12 sec
+
+Cleaning taxi trip table...
+Taxi cleaned rows: 68027167
 
 
 [2/3] Loading Traffic Volume Counts…
@@ -10,3 +13,10 @@ Ingestion time 0.30 sec
 [3/3] Loading Collision Data…
 Collision rows loaded: 229831
 Ingestion time 11.32 sec
+
+=== ADDITIONAL ANALYSIS ===
+
+Taxi Stats:
+Unique pickup locations: 263
+Unique dropoff locations: 264
+Average trip distance: 4.959114435961589

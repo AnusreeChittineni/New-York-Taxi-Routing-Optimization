@@ -15,36 +15,20 @@ SELECT
     tpep_dropoff_datetime,
     passenger_count,
     trip_distance,
-    pickup_longitude  AS pickup_lon,
-    pickup_latitude   AS pickup_lat,
+    pickup_longitude AS pickup_lon,
+    pickup_latitude  AS pickup_lat,
     dropoff_longitude AS dropoff_lon,
     dropoff_latitude  AS dropoff_lat,
-    STRFTIME(tpep_pickup_datetime, '%Y-%m-%d') AS pickup_date,
-    STRFTIME(tpep_pickup_datetime, '%H') AS pickup_hour
+
 FROM taxi_raw
 WHERE
-    -- Non-null timestamps
     tpep_pickup_datetime IS NOT NULL
     AND tpep_dropoff_datetime IS NOT NULL
-
-    -- Trip distance must exist and be positive
-    AND trip_distance IS NOT NULL
     AND trip_distance > 0
-
-    -- Pickup coords must exist
     AND pickup_longitude IS NOT NULL
     AND pickup_latitude  IS NOT NULL
-
-    -- Dropoff coords must exist
     AND dropoff_longitude IS NOT NULL
     AND dropoff_latitude  IS NOT NULL
-
-    -- Optional: remove garbage coordinates outside NYC bounds
-    AND pickup_latitude BETWEEN 35 AND 46
-    AND dropoff_latitude BETWEEN 35 AND 46
-    AND pickup_longitude BETWEEN -80 AND -60
-    AND dropoff_longitude BETWEEN -80 AND -60;
-
 """)
 
 print("Taxi cleaned rows:", con.execute("SELECT COUNT(*) FROM taxi_clean").fetchone()[0])
