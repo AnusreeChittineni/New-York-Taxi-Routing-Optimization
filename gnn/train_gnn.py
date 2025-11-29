@@ -74,6 +74,9 @@ def build_trip_samples(num_nodes: int, limit: int, db_path: str | None) -> List[
             for pu, do, dur, hr, dow in zip(df["PULocationID"], df["DOLocationID"], durations, hours, days_of_week):
                 if pd.isna(pu) or pd.isna(do) or pd.isna(dur) or dur <= 0:
                     continue
+                # FILTER OUTLIERS: Skip trips longer than 90 minutes (likely data errors)
+                if dur > 90:
+                    continue
                 samples.append((int(pu) % num_nodes, int(do) % num_nodes, float(dur), int(hr), int(dow)))
     except Exception as exc:  # pragma: no cover
         print(f"[WARN] DuckDB load failed ({exc}); using synthetic fallback.")
@@ -86,6 +89,8 @@ def build_trip_samples(num_nodes: int, limit: int, db_path: str | None) -> List[
             hour = int(rng.integers(0, 24))
             day_of_week = int(rng.integers(0, 7))
             samples.append((int(o), int(d), travel_time, hour, day_of_week))
+    
+    print(f"Loaded {len(samples)} trip samples (filtered outliers > 90 min)")
     return samples
 
 

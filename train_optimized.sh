@@ -9,12 +9,12 @@ echo "  - Eval Samples: 2000 (more stable metrics)"
 echo ""
 
 python gnn/train_gnn.py \
-    --policy-mode easy \
+    --policy-mode complex \
     --POLICY greedy \
     --lr 1e-4 \
     --rmse-eval-samples 2000 \
     --epochs 10 \
-    --train-sample-count 10000 \
+    --train-sample-count 100000 \
     --val-sample-count 1000 \
     --batch-size 8 \
     --model-path models/gnn_trained_optimized.pth \

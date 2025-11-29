@@ -68,7 +68,9 @@ class TravelTimeGNN(nn.Module):
         else:
             edge_feat = torch.cat([x[src], x[dst]], dim=-1)
         raw = self.edge_mlp(edge_feat).squeeze(-1)
-        return F.softplus(raw) + 1e-3
+        # Softplus ensures positive, then clip to reasonable range (0.1 to 60 minutes)
+        pred = F.softplus(raw) + 1e-3
+        return torch.clamp(pred, min=0.1, max=60.0)
 
 
 def build_model(
