@@ -348,9 +348,13 @@ def main() -> None:
             progress.set_postfix({"loss": loss.item()})
 
         avg_loss = float(np.mean(epoch_losses)) if epoch_losses else float("nan")
+        
+        print(f"Evaluating Train RMSE ({args.rmse_eval_samples} samples)...")
         train_rmse = evaluate_rmse(
             model, data, G, train_samples, num_edges, device, args.rmse_eval_samples, k_candidates
         )
+        
+        print(f"Evaluating Validation RMSE ({args.rmse_eval_samples} samples)...")
         val_rmse = evaluate_rmse(
             model, data, G, val_samples, num_edges, device, args.rmse_eval_samples, k_candidates
         )
@@ -362,15 +366,18 @@ def main() -> None:
         # Save checkpoint
         base, ext = os.path.splitext(args.model_path)
         ckpt_path = f"{base}_epoch_{epoch}{ext}"
+        print(f"Saving checkpoint to {ckpt_path}...")
         save_model(model.cpu(), ckpt_path)
         model.to(device) # Move back to device for next epoch
         
         # Log stats
         duration = time.time() - epoch_start_time
+        print(f"Logging stats to {args.stats_path}...")
         with open(args.stats_path, "a") as f:
             f.write(f"{epoch},{duration:.2f},{avg_loss:.6f},{train_rmse:.6f},{val_rmse:.6f}\n")
 
     # Save final model as well (copy of last checkpoint effectively, but good to have the main name)
+    print(f"Saving final model to {args.model_path}...")
     save_model(model.cpu(), args.model_path)
     print(f"Model saved to {args.model_path}")
 

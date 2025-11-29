@@ -1,0 +1,2 @@
+epoch,duration_sec,avg_loss,train_rmse,val_rmse
+1,1.71,14.082829,16.327195,17.590311
