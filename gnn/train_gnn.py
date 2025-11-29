@@ -139,7 +139,7 @@ def evaluate_rmse(
 
     subset = samples if len(samples) <= max_eval else random.sample(samples, max_eval)
     sq_errors = []
-    for origin, dest, obs in subset:
+    for origin, dest, obs in tqdm(subset, desc="Evaluating RMSE", leave=False):
         paths = k_shortest_paths(G, origin, dest, k=k_candidates, weight="time")
         if not paths:
             continue
