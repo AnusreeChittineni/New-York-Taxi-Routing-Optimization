@@ -32,7 +32,7 @@ from gnn.exploration_policy import (
     softmax_sample,
 )
 from gnn.gnn_model import build_model, detect_device, load_model, save_model
-from gnn.routing import build_nx_from_pyg, k_shortest_paths, path_edge_mask, precompute_paths
+from gnn.routing import build_nx_from_pyg, k_shortest_paths, path_edge_mask, precompute_paths, precompute_path_masks
 
 
 TripSample = Tuple[int, int, float]
@@ -126,8 +126,8 @@ def evaluate_rmse(
     model: torch.nn.Module,
     data,
     path_cache: Dict[Tuple[int, int], List[List[int]]],
+    mask_cache: Dict[Tuple[int, int], List[torch.Tensor]],
     samples: Sequence[TripSample],
-    num_edges: int,
     device: torch.device,
     max_eval: int = 500,
 ) -> float:
@@ -138,21 +138,20 @@ def evaluate_rmse(
     subset = samples if len(samples) <= max_eval else random.sample(samples, max_eval)
     sq_errors = []
     
-    # Use precomputed paths instead of dynamic routing
-    found_paths_count = 0
-    
     for origin, dest, obs in tqdm(subset, desc="Evaluating RMSE", leave=False):
-        paths = path_cache.get((origin, dest), [])
-        if not paths:
+        masks = mask_cache.get((origin, dest))
+        if not masks:
             continue
-            
-        found_paths_count += 1
-        times = []
-        for p in paths:
-            mask = path_edge_mask(p, num_edges).to(device).float()
-            times.append(float((mask * edge_pred).sum().item()))
         
-        # We assume the driver picks the path with the lowest PREDICTED time
+        # Compute times for all paths using precomputed masks
+        times = []
+        for mask in masks:
+            # Ensure mask is on the correct device
+            if mask.device != device:
+                mask = mask.to(device)
+            times.append(float((mask.float() * edge_pred).sum().item()))
+        
+        # Driver picks path with lowest predicted time
         pred_time = min(times)
         sq_errors.append((pred_time - obs) ** 2)
 
@@ -302,8 +301,29 @@ def main() -> None:
     )
 
     data = data.to(device)
-
-    data = data.to(device)
+    
+    # Precompute path masks for fast evaluation (must be after num_edges is calculated)
+    print("Precomputing path masks for evaluation...")
+    # Validate that cached paths are compatible with current graph
+    max_edge_id = -1
+    for paths_list in path_cache.values():
+        for path in paths_list:
+            if path:
+                max_edge_id = max(max_edge_id, max(path))
+    
+    if max_edge_id >= num_edges:
+        print(f"WARNING: Cached paths contain edge IDs up to {max_edge_id}, but graph only has {num_edges} edges.")
+        print(f"The path cache may be from a different graph. Clearing cache and recomputing...")
+        path_cache = precompute_paths(
+            G, 
+            train_samples + val_samples, 
+            k=k_candidates, 
+            weight="time",
+            diversity_penalty=diversity_penalty,
+            cache_path=None  # Don't load from cache
+        )
+    
+    mask_cache = precompute_path_masks(path_cache, num_edges, device=str(device))
 
     for epoch in range(start_epoch, args.epochs + 1):
         epoch_start_time = time.time()
@@ -360,12 +380,12 @@ def main() -> None:
         
         print(f"Evaluating Train RMSE ({args.rmse_eval_samples} samples)...")
         train_rmse = evaluate_rmse(
-            model, data, path_cache, train_samples, num_edges, device, args.rmse_eval_samples
+            model, data, path_cache, mask_cache, train_samples, device, args.rmse_eval_samples
         )
         
         print(f"Evaluating Validation RMSE ({args.rmse_eval_samples} samples)...")
         val_rmse = evaluate_rmse(
-            model, data, path_cache, val_samples, num_edges, device, args.rmse_eval_samples
+            model, data, path_cache, mask_cache, val_samples, device, args.rmse_eval_samples
         )
         print(
             f"Epoch {epoch}: avg loss={avg_loss:.4f} | train RMSE={train_rmse:.3f} min | "

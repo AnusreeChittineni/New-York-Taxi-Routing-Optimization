@@ -135,3 +135,33 @@ def precompute_paths(
                 # print(f"Checkpoint saved to {cache_path}")
 
     return path_cache
+
+
+def precompute_path_masks(
+    path_cache: Dict[Tuple[int, int], List[List[int]]],
+    num_edges: int,
+    device: str = "cpu"
+) -> Dict[Tuple[int, int], List[torch.Tensor]]:
+    """Precompute path masks from path cache for faster evaluation.
+    
+    Args:
+        path_cache: Dictionary mapping (origin, dest) to list of paths (edge ID lists)
+        num_edges: Total number of edges in the graph
+        device: Device to store masks on (default: "cpu")
+    
+    Returns:
+        Dictionary mapping (origin, dest) to list of path masks (boolean tensors)
+    """
+    print(f"Precomputing path masks for {len(path_cache)} OD pairs...")
+    mask_cache = {}
+    
+    for (origin, dest), paths in tqdm(path_cache.items(), desc="Computing masks"):
+        masks = []
+        for path_edge_ids in paths:
+            mask = path_edge_mask(path_edge_ids, num_edges)
+            if device != "cpu":
+                mask = mask.to(device)
+            masks.append(mask)
+        mask_cache[(origin, dest)] = masks
+    
+    return mask_cache
