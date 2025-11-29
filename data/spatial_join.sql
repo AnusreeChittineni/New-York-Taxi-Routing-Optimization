@@ -45,15 +45,15 @@ CREATE OR REPLACE VIEW collision_manhattan AS SELECT
    crash_datetime as collision_datetime
    FROM nyc_traffic_2016.collisions_2016 WHERE collision_borough='MANHATTAN';
 
+-- select trips in the second week of january
+CREATE OR REPLACE VIEW trip_january AS SELECT * FROM trip_geom  WHERE month(pickup_datetime)=1 AND day(pickup_datetime)=2;
 
-CREATE OR REPLACE VIEW trip_january AS SELECT * FROM trip_geom  WHERE MONTH(pickup_datetime) = 1;
-
-CREATE OR REPLACE VIEW collision_january AS SELECT * FROM collision_manhattan WHERE MONTH(collision_datetime) = 1;
+CREATE OR REPLACE VIEW collision_january AS SELECT * FROM collision_manhattan WHERE month(collision_datetime)= 1 AND day(collision_datetime)=2;
 
 -- fast query to pair each trip with the most recent collision before trip started
 CREATE OR REPLACE VIEW trips_recent_collisions AS SELECT * FROM trip_geom t ASOF JOIN collision_january c ON t.pickup_datetime >= c.collision_datetime;
 
 -- slower query to pair trips with collisions that took place within an hour from departure time 
-CREATE OR REPLACE VIEW trips_last_hour_collisions AS SELECT * FROM trip_geom t  JOIN collision_january c ON t.pickup_datetime - c.collision_datetime < interval '1 hour';
+CREATE OR REPLACE VIEW trips_last_hour_collisions AS SELECT * FROM trip_january t  JOIN collision_january c ON t.pickup_datetime - c.collision_datetime < interval '1 hour';
 
-CREATE OR REPLACE VIEW trips_nearby_last_hour_collisions AS SELECT * FROM trips_recent_collisions WHERE ST_DISTANCE_SPHEROID(t.trip_midpoint, c.collision_location) < 1600;
+create or replace view trips_nearby_last_hour_collisions as select * from trip_january t left join collision_january c on t.pickup_datetime - c.collision_datetime < interval '1 hour' and st_distance_spheroid(t.trip_midpoint, c.collision_location) <  1600;
