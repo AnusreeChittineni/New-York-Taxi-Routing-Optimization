@@ -39,4 +39,5 @@ IN PROGRESS!
 run python data/merge_data.py 
 
 
-duckdb nyc\_traffic\_2016.duckdb data/spatial\_joins.sql
+duckdb nyc\_traffic\_2016.duckdb
+D .read data/spatial\_join.sql
