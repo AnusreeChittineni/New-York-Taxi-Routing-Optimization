@@ -125,32 +125,41 @@ def update_graph_costs(G, edge_times: torch.Tensor) -> None:
 def evaluate_rmse(
     model: torch.nn.Module,
     data,
-    G,
+    path_cache: Dict[Tuple[int, int], List[List[int]]],
     samples: Sequence[TripSample],
     num_edges: int,
     device: torch.device,
     max_eval: int = 500,
-    k_candidates: int = 3,
 ) -> float:
     model.eval()
     with torch.no_grad():
         edge_pred = model(data).detach()
-    update_graph_costs(G, edge_pred)
-
+    
     subset = samples if len(samples) <= max_eval else random.sample(samples, max_eval)
     sq_errors = []
+    
+    # Use precomputed paths instead of dynamic routing
+    found_paths_count = 0
+    
     for origin, dest, obs in tqdm(subset, desc="Evaluating RMSE", leave=False):
-        paths = k_shortest_paths(G, origin, dest, k=k_candidates, weight="time")
+        paths = path_cache.get((origin, dest), [])
         if not paths:
             continue
+            
+        found_paths_count += 1
         times = []
         for p in paths:
             mask = path_edge_mask(p, num_edges).to(device).float()
             times.append(float((mask * edge_pred).sum().item()))
+        
+        # We assume the driver picks the path with the lowest PREDICTED time
         pred_time = min(times)
         sq_errors.append((pred_time - obs) ** 2)
 
-    return math.sqrt(float(np.mean(sq_errors))) if sq_errors else float("nan")
+    if not sq_errors:
+        return float("nan")
+        
+    return math.sqrt(float(np.mean(sq_errors)))
 
 
 def find_latest_checkpoint(model_path: str) -> Tuple[str | None, int]:
@@ -351,12 +360,12 @@ def main() -> None:
         
         print(f"Evaluating Train RMSE ({args.rmse_eval_samples} samples)...")
         train_rmse = evaluate_rmse(
-            model, data, G, train_samples, num_edges, device, args.rmse_eval_samples, k_candidates
+            model, data, path_cache, train_samples, num_edges, device, args.rmse_eval_samples
         )
         
         print(f"Evaluating Validation RMSE ({args.rmse_eval_samples} samples)...")
         val_rmse = evaluate_rmse(
-            model, data, G, val_samples, num_edges, device, args.rmse_eval_samples, k_candidates
+            model, data, path_cache, val_samples, num_edges, device, args.rmse_eval_samples
         )
         print(
             f"Epoch {epoch}: avg loss={avg_loss:.4f} | train RMSE={train_rmse:.3f} min | "
