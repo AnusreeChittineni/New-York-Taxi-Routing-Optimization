@@ -35,7 +35,7 @@ from gnn.gnn_model import build_model, detect_device, load_model, save_model
 from gnn.routing import build_nx_from_pyg, k_shortest_paths, path_edge_mask, precompute_paths, precompute_path_masks
 
 
-TripSample = Tuple[int, int, float]
+TripSample = Tuple[int, int, float, int, int]  # (origin, dest, travel_min, hour, day_of_week)
 
 
 def batch_iter(dataset: Sequence[TripSample], batch_size: int) -> Sequence[Sequence[TripSample]]:
@@ -45,10 +45,16 @@ def batch_iter(dataset: Sequence[TripSample], batch_size: int) -> Sequence[Seque
 
 def load_samples_from_parquet(path: Path, num_nodes: int) -> List[TripSample]:
     df = pd.read_parquet(path)
-    return [
-        (int(row.origin) % num_nodes, int(row.destination) % num_nodes, float(row.travel_min))
-        for row in df.itertuples(index=False)
-    ]
+    samples = []
+    for row in df.itertuples(index=False):
+        origin = int(row.origin) % num_nodes
+        dest = int(row.destination) % num_nodes
+        travel_min = float(row.travel_min)
+        # Extract temporal features if available, otherwise use defaults
+        hour = int(getattr(row, 'hour', 12))  # Default to noon
+        day_of_week = int(getattr(row, 'day_of_week', 2))  # Default to Wednesday
+        samples.append((origin, dest, travel_min, hour, day_of_week))
+    return samples
 
 
 def build_trip_samples(num_nodes: int, limit: int, db_path: str | None) -> List[TripSample]:
@@ -60,10 +66,15 @@ def build_trip_samples(num_nodes: int, limit: int, db_path: str | None) -> List[
             pickups = pd.to_datetime(df["pickup_ts"])
             dropoffs = pd.to_datetime(df["dropoff_ts"])
             durations = (dropoffs - pickups).dt.total_seconds() / 60.0
-            for pu, do, dur in zip(df["PULocationID"], df["DOLocationID"], durations):
+            
+            # Extract temporal features
+            hours = pickups.dt.hour
+            days_of_week = pickups.dt.dayofweek  # Monday=0, Sunday=6
+            
+            for pu, do, dur, hr, dow in zip(df["PULocationID"], df["DOLocationID"], durations, hours, days_of_week):
                 if pd.isna(pu) or pd.isna(do) or pd.isna(dur) or dur <= 0:
                     continue
-                samples.append((int(pu) % num_nodes, int(do) % num_nodes, float(dur)))
+                samples.append((int(pu) % num_nodes, int(do) % num_nodes, float(dur), int(hr), int(dow)))
     except Exception as exc:  # pragma: no cover
         print(f"[WARN] DuckDB load failed ({exc}); using synthetic fallback.")
 
@@ -71,7 +82,10 @@ def build_trip_samples(num_nodes: int, limit: int, db_path: str | None) -> List[
         rng = np.random.default_rng(42)
         for _ in range(limit):
             o, d = rng.choice(num_nodes, size=2, replace=False)
-            samples.append((int(o), int(d), float(rng.uniform(5, 30))))
+            travel_time = float(rng.uniform(5, 30))
+            hour = int(rng.integers(0, 24))
+            day_of_week = int(rng.integers(0, 7))
+            samples.append((int(o), int(d), travel_time, hour, day_of_week))
     return samples
 
 
@@ -138,7 +152,9 @@ def evaluate_rmse(
     subset = samples if len(samples) <= max_eval else random.sample(samples, max_eval)
     sq_errors = []
     
-    for origin, dest, obs in tqdm(subset, desc="Evaluating RMSE", leave=False):
+    for origin, dest, obs, hour, day_of_week in tqdm(subset, desc="Evaluating RMSE", leave=False):
+        # TODO: Use temporal features (hour, day_of_week) for time-aware prediction
+        # For now, we unpack them but don't use them - model modification needed
         masks = mask_cache.get((origin, dest))
         if not masks:
             continue
@@ -158,7 +174,28 @@ def evaluate_rmse(
     if not sq_errors:
         return float("nan")
         
-    return math.sqrt(float(np.mean(sq_errors)))
+    return math.sqrt(float(np.mean(sq_errors))) if sq_errors else float("nan")
+
+
+def encode_temporal_features(hour: int, day_of_week: int) -> np.ndarray:
+    """Encode temporal features using cyclical (sin/cos) encoding.
+    
+    Args:
+        hour: Hour of day (0-23)
+        day_of_week: Day of week (0=Monday, 6=Sunday)
+    
+    Returns:
+        Array of [sin_hour, cos_hour, sin_day, cos_day]
+    """
+    hour_radians = 2 * np.pi * hour / 24.0
+    day_radians = 2 * np.pi * day_of_week / 7.0
+    
+    return np.array([
+        np.sin(hour_radians),
+        np.cos(hour_radians),
+        np.sin(day_radians),
+        np.cos(day_radians),
+    ], dtype=np.float32)
 
 
 def find_latest_checkpoint(model_path: str) -> Tuple[str | None, int]:
@@ -341,7 +378,7 @@ def main() -> None:
             batch_losses = []
             entropy_bonus = 0.0
 
-            for origin, dest, obs_time in batch:
+            for origin, dest, obs_time, hour, day_of_week in batch:
                 epsilon = schedule_fn(global_step, args.EPS_START, args.EPS_END, args.EPS_STEPS)
                 tau = schedule_fn(global_step, args.TAU_START, args.TAU_END, args.TAU_STEPS)
                 
