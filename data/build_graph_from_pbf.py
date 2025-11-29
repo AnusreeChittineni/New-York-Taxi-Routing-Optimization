@@ -99,6 +99,19 @@ def build_data_object(nodes_gdf, edges_gdf) -> Data:
         ]
     ).astype(np.float32)
 
+    # Extract OSM IDs (default to -1 if missing, though they should be present)
+    # 'osmid' in edges_gdf can be a list if multiple ways are merged, but usually it's an int or list of ints.
+    # For simplicity, we'll take the first one if it's a list, or just the value.
+    def get_osmid(val):
+        if isinstance(val, list):
+            return int(val[0])
+        try:
+            return int(val)
+        except:
+            return -1
+
+    edge_osm_ids = edges["osmid"].apply(get_osmid).to_numpy(int)
+
     edge_index = np.vstack(
         [
             edges["u"].map(node_id_to_idx).to_numpy(int),
@@ -110,6 +123,7 @@ def build_data_object(nodes_gdf, edges_gdf) -> Data:
         x=torch.from_numpy(node_feats),
         edge_index=torch.from_numpy(edge_index).long(),
         edge_attr=torch.from_numpy(edge_attr),
+        edge_osm_id=torch.from_numpy(edge_osm_ids).long(),
     )
     data.num_nodes = node_feats.shape[0]
     return data

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import math
 import os
 import random
+import time
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
@@ -29,7 +31,7 @@ from gnn.exploration_policy import (
     linear_anneal,
     softmax_sample,
 )
-from gnn.gnn_model import build_model, detect_device, save_model
+from gnn.gnn_model import build_model, detect_device, load_model, save_model
 from gnn.routing import build_nx_from_pyg, k_shortest_paths, path_edge_mask, precompute_paths
 
 
@@ -151,6 +153,40 @@ def evaluate_rmse(
     return math.sqrt(float(np.mean(sq_errors))) if sq_errors else float("nan")
 
 
+def find_latest_checkpoint(model_path: str) -> Tuple[str | None, int]:
+    """Finds the latest checkpoint based on the model path pattern."""
+    base_name = os.path.splitext(model_path)[0]
+    extension = os.path.splitext(model_path)[1]
+    # Pattern: base_name + "_epoch_" + N + extension
+    search_pattern = f"{base_name}_epoch_*{extension}"
+    files = glob.glob(search_pattern)
+    
+    if not files:
+        return None, 0
+        
+    latest_epoch = 0
+    latest_file = None
+    
+    for f in files:
+        try:
+            # Extract epoch number
+            # f is like "models/gnn_trained_epoch_5.pth"
+            # remove extension -> "models/gnn_trained_epoch_5"
+            # split by "_" -> [..., "epoch", "5"]
+            parts = os.path.splitext(f)[0].split("_")
+            if "epoch" in parts:
+                epoch_idx = parts.index("epoch")
+                if epoch_idx + 1 < len(parts):
+                    epoch_num = int(parts[epoch_idx + 1])
+                    if epoch_num > latest_epoch:
+                        latest_epoch = epoch_num
+                        latest_file = f
+        except ValueError:
+            continue
+            
+    return latest_file, latest_epoch
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train GNN with candidate-route sampling.")
     parser.add_argument("--graph-path", type=str, default="data/nyc_graph.pt")
@@ -180,6 +216,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--anneal", type=str, default="linear", choices=["linear", "cosine"])
     parser.add_argument("--rmse-eval-samples", type=int, default=500)
     parser.add_argument("--cache-dir", type=str, default="cache", help="Directory to store path caches")
+    parser.add_argument("--stats-path", type=str, default="training_stats.csv", help="Path to save training statistics")
     return parser.parse_args()
 
 
@@ -218,6 +255,28 @@ def main() -> None:
     schedule_fn = linear_anneal if args.anneal == "linear" else cosine_anneal
     global_step = 0
 
+    # Check for checkpoints
+    start_epoch = 1
+    latest_ckpt, latest_epoch = find_latest_checkpoint(args.model_path)
+    if latest_ckpt:
+        print(f"Found checkpoint: {latest_ckpt}. Resuming from epoch {latest_epoch + 1}")
+        model = load_model(latest_ckpt, data.num_node_features, args.hidden_channels, edge_attr_dim=edge_dim).to(device)
+        # Note: We are not loading optimizer state here for simplicity, but ideally we should.
+        # Assuming the user just wants to continue training weights.
+        # If optimizer state is needed, save_model/load_model needs to handle it.
+        start_epoch = latest_epoch + 1
+        # Approximate global step? Or just reset. 
+        # For annealing, global_step matters. 
+        # Let's estimate global_step based on epochs * batches
+        batches_per_epoch = len(train_samples) // args.batch_size
+        global_step = latest_epoch * batches_per_epoch
+
+    # Initialize stats file
+    stats_header = "epoch,duration_sec,avg_loss,train_rmse,val_rmse\n"
+    if not os.path.exists(args.stats_path):
+        with open(args.stats_path, "w") as f:
+            f.write(stats_header)
+
     os.makedirs(args.cache_dir, exist_ok=True)
     cache_file = os.path.join(args.cache_dir, f"paths_k{k_candidates}_p{args.policy_mode}.pkl")
     
@@ -235,7 +294,10 @@ def main() -> None:
 
     data = data.to(device)
 
-    for epoch in range(1, args.epochs + 1):
+    data = data.to(device)
+
+    for epoch in range(start_epoch, args.epochs + 1):
+        epoch_start_time = time.time()
         epoch_losses = []
         random.shuffle(train_samples)
         batches = list(batch_iter(train_samples, args.batch_size))
@@ -297,6 +359,18 @@ def main() -> None:
             f"val RMSE={val_rmse:.3f} min (policy_mode={args.policy_mode})"
         )
 
+        # Save checkpoint
+        base, ext = os.path.splitext(args.model_path)
+        ckpt_path = f"{base}_epoch_{epoch}{ext}"
+        save_model(model.cpu(), ckpt_path)
+        model.to(device) # Move back to device for next epoch
+        
+        # Log stats
+        duration = time.time() - epoch_start_time
+        with open(args.stats_path, "a") as f:
+            f.write(f"{epoch},{duration:.2f},{avg_loss:.6f},{train_rmse:.6f},{val_rmse:.6f}\n")
+
+    # Save final model as well (copy of last checkpoint effectively, but good to have the main name)
     save_model(model.cpu(), args.model_path)
     print(f"Model saved to {args.model_path}")
 
