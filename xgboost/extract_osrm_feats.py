@@ -19,11 +19,12 @@ def compute_osrm_fets(osrm_server_base_url: str, trips: pd.DataFrame):
     with OsrmClient(base_url=osrm_server_base_url) as osrm:
         for i, row in tqdm(trips.iterrows(), total=trips.shape[0]):
             coordinates = [(row['pickup_longitude'], row['pickup_latitude']), (row['dropoff_longitude'], row['dropoff_latitude'])]
-            breakpoint()
-            osrm_route = osrm.route(coordinates, steps=True)
+
+            print(coordinates)
+            osrm_route = osrm.route(coordinates, steps=False)
             osrm_fets['total_distance'].append(osrm_route.routes[0].distance)
             osrm_fets['total_travel_time'].append(osrm_route.routes[0].duration)
-            osrm_fets['number_of_steps'].append(sum([len(leg.steps) for leg in osrm_route.routes[0].legs]))
+            # osrm_fets['number_of_steps'].append(sum([len(leg.steps) for leg in osrm_route.routes[0].legs]))
 
     return osrm_fets
 
