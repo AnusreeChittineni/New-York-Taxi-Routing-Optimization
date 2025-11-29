@@ -23,22 +23,23 @@ def _compute_route_for_trip(args):
         dropoff_latitude,
     ) = args
 
-    # No shared context: create a new client for this call
+    with OsrmClient(base_url=osrm_server_base_url) as client: 
+        try:
 
-    with OsrmClient(base_url=osrm_server_base_url) as client:
-        coordinates = [
-            (pickup_longitude, pickup_latitude),
-            (dropoff_longitude, dropoff_latitude),
-        ]
+            coordinates = [
+                (pickup_longitude, pickup_latitude),
+                (dropoff_longitude, dropoff_latitude),
+            ]
 
-        osrm_route = client.route(coordinates, steps=False)
-        route = osrm_route.routes[0]
+            osrm_route = client.route(coordinates, steps=False)
+            route = osrm_route.routes[0]
 
-        trip_distance = route.distance        # meters
-        trip_duration = route.duration        # seconds
+            trip_distance = route.distance        # meters
+            trip_duration = route.duration        # seconds
 
-        return trip_distance, trip_duration
-
+            return trip_distance, trip_duration
+        except:
+            return 0, 0
 
 def compute_osrm_fets(
     osrm_server_base_url: str,
