@@ -147,7 +147,7 @@ def precompute_path_masks(
     Args:
         path_cache: Dictionary mapping (origin, dest) to list of paths (edge ID lists)
         num_edges: Total number of edges in the graph
-        device: Device to store masks on (default: "cpu")
+        device: Device to store masks on (default: "cpu", recommended to avoid OOM)
     
     Returns:
         Dictionary mapping (origin, dest) to list of path masks (boolean tensors)
@@ -159,8 +159,7 @@ def precompute_path_masks(
         masks = []
         for path_edge_ids in paths:
             mask = path_edge_mask(path_edge_ids, num_edges)
-            if device != "cpu":
-                mask = mask.to(device)
+            # Keep masks on CPU to avoid OOM on GPU
             masks.append(mask)
         mask_cache[(origin, dest)] = masks
     

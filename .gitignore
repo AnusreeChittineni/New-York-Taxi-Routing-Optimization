@@ -30,7 +30,8 @@ dist/
 .spyproject/
 
 # Cached data & legacy assets
-cache/
+cache/*.pkl
+cache/*.tmp
 lion/
 dataconnection/legacy/lion/
 # Parquet exports
