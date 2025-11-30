@@ -54,18 +54,17 @@ def compute_osrm_fets(
     New columns:
     - trip_duration
     - trip_distance
-    - steps
     """
 
+    osrm_fets = {
+        "trip_distance": [],
+        "trip_duration_osrm": [],
+    }
     if trips.empty:
-        return {
-            "trip_distance": [],
-            "trip_duration": [],
-            "steps": [],
-        }
+        return osrm_fets
 
     if num_workers is None:
-        num_workers = cpu_count()
+        num_workers = cpu_count() * 8
 
     # Build an iterator of arguments for each worker
     args_iter = (
@@ -81,11 +80,6 @@ def compute_osrm_fets(
 
     n_trips = len(trips)
 
-    osrm_fets = {
-        "trip_distance": [],
-        "trip_duration": [],
-        "steps": [],
-    }
 
     with Pool(processes=num_workers) as pool:
         for trip_distance, trip_duration  in tqdm(
@@ -93,7 +87,7 @@ def compute_osrm_fets(
             total=n_trips,
         ):
             osrm_fets["trip_distance"].append(trip_distance)
-            osrm_fets["trip_duration"].append(trip_duration)
+            osrm_fets["trip_duration_osrm"].append(trip_duration)
     return osrm_fets
 
 
@@ -149,6 +143,8 @@ if __name__ == "__main__":
     )
 
     osrm_fets_df = pd.DataFrame.from_dict(osrm_fets)
+    print(osrm_fets_df)
+
     trips_osrm_df = pd.concat((trips_df, osrm_fets_df), axis=1)
 
     trips_osrm_df.to_csv(args.output_csv, index=False)
