@@ -14,7 +14,7 @@ python gnn/train_gnn.py \
     --lr 1e-4 \
     --rmse-eval-samples 2000 \
     --epochs 10 \
-    --train-sample-count 100000 \
+    --train-sample-count 50000 \
     --val-sample-count 1000 \
     --batch-size 8 \
     --model-path models/gnn_trained_optimized.pth \
