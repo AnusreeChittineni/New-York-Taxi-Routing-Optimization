@@ -143,14 +143,72 @@ def load_taxi_2016():
     print(f"Total rows inserted into taxi_raw: {total_rows_inserted:,}")
     print(f"Total time: {elapsed:.2f} sec\n")
 
-load_taxi_2016()
+# load_taxi_2016()
+
+
+PARQUET_URLS = [
+    f"https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2016-{m:02}.parquet"
+    for m in range(1, 13)
+]
+
+def update_location_ids_from_parquet(con):
+    """
+    Connects to the DuckDB connection (con) and updates the PULocationID and 
+    DOLocationID columns in the 'taxi_raw' table using data from the 2016 
+    TLC Yellow Taxi Parquet files.
+    """
+    
+    # 1. Prepare the Parquet URL string for DuckDB
+    parquet_list_str = "','".join(PARQUET_URLS)
+    
+    print("\n--- STAGE: ENRICHING LOCATION IDs ---")
+    print("Using 2016 TLC Parquet files to update Location IDs in taxi_raw.")
+    start_time = time.time()
+
+    # 2. Execute the Massive Update
+    try:
+        # Check current status before update (Optional but helpful)
+        current_null_count = con.execute("""
+            SELECT COUNT(*) FROM taxi_raw 
+            WHERE PULocationID IS NULL OR DOLocationID IS NULL
+        """).fetchone()[0]
+        print(f"Rows missing Location IDs before update: {current_null_count:,}")
+        
+        # The key UPDATE FROM query: joins taxi_raw (t) with the Parquet data (p)
+        update_count = con.execute(f"""
+        UPDATE taxi_raw AS t
+        SET 
+            PULocationID = p.PULocationID,
+            DOLocationID = p.DOLocationID
+        FROM read_parquet(['{parquet_list_str}']) AS p
+        WHERE 
+            t.tpep_pickup_datetime = p.tpep_pickup_datetime 
+            AND t.tpep_dropoff_datetime = p.tpep_dropoff_datetime;
+        """).rowcount
+
+        elapsed_time = time.time() - start_time
+        print(f"\nUpdate Complete. Total rows enriched: {update_count:,}")
+        print(f"Time taken for update: {elapsed_time:.2f} seconds")
+
+        # 3. Final Verification
+        final_null_count = con.execute("""
+            SELECT COUNT(*) FROM taxi_raw 
+            WHERE PULocationID IS NULL OR DOLocationID IS NULL
+        """).fetchone()[0]
+        print(f"Rows still missing Location IDs after update: {final_null_count:,}")
+
+    except Exception as e:
+        print(f"An error occurred during the Location ID update: {e}")
+
+
+update_location_ids_from_parquet(con)
 
 # ------------------------------------------------------------
 # 2. LOAD TRAFFIC VOLUME COUNTS (2016)
 # ------------------------------------------------------------
 
 print("\n[2/3] Loading Traffic Volume Counts…")
-traffic_file = "Automated_Traffic_Volume_Counts_20251102.csv"
+traffic_file = "../Automated_Traffic_Volume_Counts_20251203.csv"
 
 t0 = time.time()
 con.execute(f"""
@@ -169,7 +227,7 @@ print(f"Ingestion time {t1-t0:.2f} sec")
 # ------------------------------------------------------------
 
 print("\n[3/3] Loading Collision Data…")
-crash_file = "Motor_Vehicle_Collisions_-_Crashes_20251102.csv"
+crash_file = "../Motor_Vehicle_Collisions_-_Crashes_20251203.csv"
 
 t0 = time.time()
 

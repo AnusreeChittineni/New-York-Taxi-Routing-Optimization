@@ -1,4 +1,5 @@
 import duckdb
+import pandas as pd
 
 # ---------------------------------------
 # Connect to the DuckDB warehouse
@@ -11,6 +12,8 @@ print("=== TABLES PRESENT IN WAREHOUSE ===")
 tables = con.execute("SHOW TABLES").fetchall()
 table_list = [t[0] for t in tables]
 print(table_list, "\n")
+
+print("Valid Location IDs:", con.execute("SELECT COUNT(*) FROM taxi_clean WHERE PULocationID IS NOT NULL AND DOLocationID IS NOT NULL").fetchone()[0])
 
 # ---------------------------------------
 # Helper function for table summaries
@@ -45,11 +48,17 @@ def explore_table(table_name):
 
     # Example rows
     try:
-        examples = con.execute(f"SELECT * FROM {table_name} LIMIT 5").fetchdf()
+        examples = con.execute(f"SELECT * FROM {table_name} LIMIT 2").fetchdf()
         print("\nExample rows:")
-        print(examples)
-    except:
-        print("(Could not fetch example rows.)")
+                
+        # Set Pandas options to display all columns and rows without truncation
+        with pd.option_context('display.max_rows', None, 
+                               'display.max_columns', None, 
+                               'display.width', 1000): # 'display.width' helps with line wrapping
+            print(examples)
+            
+    except Exception as e:
+        print(f"(Could not fetch example rows: {e})")
 
     print("\n")
 
@@ -58,10 +67,13 @@ def explore_table(table_name):
 # Explore all tables
 # ---------------------------------------
 tables = [
-    "taxi_raw",
+    "taxi_clean",
     "traffic_2016",
     "collisions_2016",
-    "closed_streets"
+    "closed_streets",
+    "trips_with_closures",
+    "trips_with_traffic"
+
 ]
 
 for t in tables:
