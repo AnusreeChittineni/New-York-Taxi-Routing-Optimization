@@ -2,6 +2,13 @@ Install: pandas, scipy, numpy, torch, scikit-learn, seaborn, matplotlib
 import numpy as np
 import os
 
+Be sure to have run files within data folder (follow readme within data folder) to create duckdb tables. 
+Edit train.py and pregnn.py to access tables location.
+
+Download:
+1. Taxi Zone Lookup Table - https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv
+2. Taxi Zone Shapefile - https://d37ci6vzurychx.cloudfront.net/misc/taxi_zones.zip
+
 
 Run pregnn.py to set up data specifically for the collisionRisk training
 Run hotspotDBSCAN.py to create dbscan clusters for collisionRisk input
