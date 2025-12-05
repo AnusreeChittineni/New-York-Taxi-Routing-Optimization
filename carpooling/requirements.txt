@@ -1,0 +1,11 @@
+torch
+torch-geometric
+numpy
+pandas
+networkx
+duckdb
+requests
+tqdm
+geopy
+pyyaml
+faiss-cpu
