@@ -1,5 +1,10 @@
 """
-static_assignment_wardrop.py
+NOTE: Code generated with assistance from LLMs. Prompt(s) used:
+
+Create a python script to model wardrop's first principle of traffic assignment, 
+using new york taxi trips stored in a duckdb database. As a reminder, wardrop's first
+principle states that users route themselves to minimize their trip times, even 
+if routes taken by users are not optimal for all users in the system
 
 Perform a simple static traffic assignment on the NYC road network using Wardrop's
 first principle (user equilibrium, UE):
@@ -15,7 +20,6 @@ This script:
 4. Optionally removes a road segment (by OSM ID) from the network before assignment.
 5. Reports the average UE travel time across all sampled trips.
 
-This is a pedagogical implementation; it is not tuned for city-scale production use.
 
 Usage example:
 

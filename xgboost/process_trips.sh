@@ -1,3 +1,7 @@
+# NOTE: code generated with LLMs. Prompts used:
+# Create a bash script to issue multiple slurm jobs in parallel with srun, using the extract_osrm_feats.py script
+
+
 #!/usr/bin/env bash
 set -euo pipefail
 
