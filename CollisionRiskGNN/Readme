@@ -1,1 +1,9 @@
+Install: pandas, scipy, numpy, torch, scikit-learn, seaborn, matplotlib
+import numpy as np
+import os
 
+
+Run pregnn.py to set up data specifically for the collisionRisk training
+Run hotspotDBSCAN.py to create dbscan clusters for collisionRisk input
+Run train.py - this will use methods from dataloader.py, normalize.py, gcn.py to collect data, normalize it and train it using the gcn model.
+  --- This will also print ROC, Confusion Matrix and PRC graphs to understand graph accuracy.
