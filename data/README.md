@@ -5,7 +5,8 @@ This guide explains how to set up all datasets used in this project, including h
 ## Datasets
 
 2016 Yellow Taxi Trip Data: 
-Loads from TLC parquet files 
+Loads from TLC parquet files and from cloud api
+Original source - https://data.cityofnewyork.us/Transportation/2016-Yellow-Taxi-Trip-Data/uacg-pexx/about_data 
 
 Automated Traffic Volume Counts: 
 Go to this link - https://data.cityofnewyork.us/Transportation/Automated-Traffic-Volume-Counts/7ym2-wayt/about_data 
@@ -24,18 +25,35 @@ run pip install -r requirements.txt
 
 ### Setting up local persistent duckdb
 
-run load_data.py
+run build_warehouse.py
 
-python data\load_data.py
+python data/duckdb/build_warehouse.py
 
-You will now have a duckdb file
+You will now have a duckdb warehouse file
 
 If needed, we will need to store the duckdb file elsewhere (i.e. S3 bucket) if we are actively making changes that need to build off of one another dynamcially and can't depend on each us running scripts on our end
 
 ## Merging Data
 
-IN PROGRESS!
+run python data/duckdb/merge_and_clean.py 
 
-run python data/merge_data.py 
+Now you will have fully built out the Data Warehouse!
+
+## Exploring Data
+
+run python data/duckdb/explore_data.py 
+
+Will also return some basic stats on the warehouse
+
+## Use Cases
+
+Please see scripts housed under data/duckdb/use_cases folder
+
+## EDA
+
+run python data/duckdb/eda_plots.py 
+
+
+ 
 
 
